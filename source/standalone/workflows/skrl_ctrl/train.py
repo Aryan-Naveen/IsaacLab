@@ -46,7 +46,7 @@ device = env.device
 
 
 # instantiate a memory as experience replay
-memory = RandomMemory(memory_size=15625, num_envs=env.num_envs, device=device)
+memory = RandomMemory(memory_size=int(1e6), num_envs=env.num_envs, device=device)
 
 # define hidden dimension
 actor_hidden_dim = 256
@@ -129,25 +129,25 @@ cfg["gradient_steps"] = 1
 cfg["batch_size"] = 256
 cfg["discount_factor"] = 0.99
 cfg["polyak"] = 0.005
-cfg["actor_learning_rate"] = 1e-5/3
-cfg["critic_learning_rate"] = 1e-5/3
+cfg["actor_learning_rate"] = 1e-4
+cfg["critic_learning_rate"] = 1e-4
 cfg["weight_decay"] = 0
-cfg["feature_learning_rate"] = 1e-5
+cfg["feature_learning_rate"] = 1e-4
 cfg["random_timesteps"] = 25e3
-cfg["learning_starts"] = 25e3
-cfg["grad_norm_clip"] = 0
+cfg["learning_starts"] = 0
+cfg["grad_norm_clip"] = 0.0
 cfg["learn_entropy"] = True
-cfg["entropy_learning_rate"] = 5e-3
+cfg["entropy_learning_rate"] = 1e-4
 cfg["initial_entropy_value"] = 1.0
 # cfg["state_preprocessor"] = RunningStandardScaler
 # cfg["state_preprocessor_kwargs"] = {"size": env.observation_space, "device": device}
 # logging to TensorBoard and write checkpoints (in timesteps)
-cfg["experiment"]["write_interval"] = 80
-cfg["experiment"]["checkpoint_interval"] = 1000
+cfg["experiment"]["write_interval"] = 800
+cfg["experiment"]["checkpoint_interval"] = 8000
 cfg["experiment"]["directory"] = "runs/torch/Quadcopter-Trajectory"
 cfg['use_feature_target'] = True
-cfg['extra_feature_steps'] = 3
-cfg['target_update_period'] = 2
+cfg['extra_feature_steps'] = 2
+cfg['target_update_period'] = 1
 
 
 
@@ -158,7 +158,7 @@ agent = CTRLSACAgent(
             observation_space=env.observation_space,
             action_space=env.action_space,
             device=device
-        )
+)
 
 # agent.load('/home/anaveen/Documents/research_ws/IsaacLab/runs/torch/Quadcopter-Trajectory/24-11-11_19-15-43-148610_CTRLSACAgent/checkpoints/agent_249000.pt')
 # configure and instantiate the RL trainer

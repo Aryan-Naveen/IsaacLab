@@ -11,18 +11,13 @@ class Critic(DeterministicMixin, Model):
         
         self.feature_dim = feature_dim
 
-        self.q1net = nn.Sequential(nn.Linear(feature_dim, hidden_dim),
-                                 nn.ELU(),
-                                 nn.Linear(hidden_dim, 1))
-        self.q2net = nn.Sequential(nn.Linear(feature_dim, hidden_dim),
+        self.qnet = nn.Sequential(nn.Linear(feature_dim, hidden_dim),
                                  nn.ELU(),
                                  nn.Linear(hidden_dim, 1))
 
     def compute(self, inputs, role):
-
-        q1 = self.q1net(inputs['z_phi'])
-        q2 = self.q2net(inputs['z_phi'])
-        return (q1, q2), {}
+        q1 = self.qnet(inputs['z_phi'])
+        return q1, {}
 
 
 class TestCritic(DeterministicMixin, Model):

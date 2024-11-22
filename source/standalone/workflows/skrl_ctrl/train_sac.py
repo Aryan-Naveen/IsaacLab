@@ -77,7 +77,7 @@ device = env.device
 
 
 # instantiate a memory as rollout buffer (any memory can be used for this)
-memory = RandomMemory(memory_size=15625, num_envs=env.num_envs, device=device)
+memory = RandomMemory(memory_size=int(1e6), num_envs=env.num_envs, device=device)
 
 
 # instantiate the agent's models (function approximators).
@@ -98,11 +98,11 @@ cfg["gradient_steps"] = 1
 cfg["batch_size"] = 1024
 cfg["discount_factor"] = 0.99
 cfg["polyak"] = 0.005
-cfg["actor_learning_rate"] = 1e-4/3
-cfg["critic_learning_rate"] = 1e-4/3
+cfg["actor_learning_rate"] = 1e-4
+cfg["critic_learning_rate"] = 1e-4
 cfg["random_timesteps"] = 25e3
 cfg["learning_starts"] = 25e3
-cfg["grad_norm_clip"] = 0
+cfg["grad_norm_clip"] = 0.0
 cfg["learn_entropy"] = True
 cfg["entropy_learning_rate"] = 1e-4
 cfg["initial_entropy_value"] = 1.0

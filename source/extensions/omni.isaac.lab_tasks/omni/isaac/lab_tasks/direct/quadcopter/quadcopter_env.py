@@ -103,7 +103,7 @@ class QuadcopterEnvCfg(DirectRLEnvCfg):
 @configclass
 class QuadcopterTrajectoryEnvCfg(DirectRLEnvCfg):
     # env
-    episode_length_s = 3.0
+    episode_length_s = 10.0
     decimation = 2
     num_actions = 4
     window = 10
@@ -144,7 +144,7 @@ class QuadcopterTrajectoryEnvCfg(DirectRLEnvCfg):
     )
 
     # scene
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=2.5, replicate_physics=True)
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=32, env_spacing=5, replicate_physics=True)
 
     # robot
     robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
@@ -152,12 +152,18 @@ class QuadcopterTrajectoryEnvCfg(DirectRLEnvCfg):
     moment_scale = 0.01
 
     # reward scales
+    # pos_reward_scale = 100
+    # vel_reward_scale = 10
+    # av_rew_scale = 1
+    # thrust_rew_scale = 50
+    # torques_rew_scale = 1
+    # survival_rew_scale = 10    
     pos_reward_scale = 0
     vel_reward_scale = 0
-    av_rew_scale = 5
-    thrust_rew_scale = 5
-    torques_rew_scale = 5
-    survival_rew_scale = 1
+    av_rew_scale = 1
+    thrust_rew_scale = 1
+    torques_rew_scale = 1
+    survival_rew_scale = 1    
     
 
 class QuadcopterEnv(DirectRLEnv):
