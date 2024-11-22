@@ -36,11 +36,6 @@ class CTRLSACAgent(SAC):
             cfg=cfg
         )
 
-
-        self.policy_optimizer = torch.optim.Adam(self.policy.parameters(), lr=self._actor_learning_rate, betas=[0.9, 0.999], weight_decay=0)
-        self.critic_optimizer = torch.optim.Adam(self.critic_1.parameters(), lr=self._critic_learning_rate, betas=[0.9, 0.999], weight_decay=0)
-
-
         self.phi = self.models.get("phi", None)
         self.frozen_phi = self.models.get("frozen_phi", None)
         self.mu = self.models.get("mu", None)
@@ -58,7 +53,7 @@ class CTRLSACAgent(SAC):
             weight_decay=cfg['weight_decay'], lr=cfg['feature_learning_rate'])
 
         self.checkpoint_modules["phi"] = self.phi
-        # self.checkpoint_modules["frozen_phi"] = self.frozen_phi
+        self.checkpoint_modules["frozen_phi"] = self.frozen_phi
         self.checkpoint_modules["mu"] = self.mu
         self.checkpoint_modules["theta"] = self.theta
         
@@ -335,11 +330,11 @@ class CTRLSACAgent(SAC):
                 next_actions, next_log_prob, _ = self.policy.act({"states": sampled_next_states}, role="policy")
 
                 if self.use_feature_target:
-                    z_phi = self.frozen_phi_target.act({"states": sampled_states, "actions": sampled_actions}, role="feature")
-                    z_phi_next = self.frozen_phi_target.act({"states": sampled_next_states, "actions": next_actions}, role="feature")
+                    z_phi, _, _ = self.frozen_phi_target.act({"states": sampled_states, "actions": sampled_actions}, role="feature")
+                    z_phi_next, _, _ = self.frozen_phi_target.act({"states": sampled_next_states, "actions": next_actions}, role="feature")
                 else:
-                    z_phi = self.frozen_phi.act({"states": sampled_states, "actions": sampled_actions}, role="feature")
-                    z_phi_next = self.frozen_phi.act({"states": sampled_next_states, "actions": next_actions}, role="feature")
+                    z_phi, _, _ = self.frozen_phi.act({"states": sampled_states, "actions": sampled_actions}, role="feature")
+                    z_phi_next, _, _ = self.frozen_phi.act({"states": sampled_next_states, "actions": next_actions}, role="feature")
 
 
                 target_q1_values, _, _ = self.target_critic_1.act({"z_phi": z_phi_next}, role="target_critic_1")
@@ -365,7 +360,7 @@ class CTRLSACAgent(SAC):
 
             # compute policy (actor) loss
             actions, log_prob, _ = self.policy.act({"states": sampled_states}, role="policy")
-            z_phi = self.frozen_phi.act({"states": sampled_states, "actions": actions}, role="feature")            
+            z_phi, _, _ = self.frozen_phi.act({"states": sampled_states, "actions": actions}, role="feature")            
             critic_1_values, _, _ = self.critic_1.act({"z_phi": z_phi}, role="critic_1")
             critic_2_values, _, _ = self.critic_2.act({"z_phi": z_phi}, role="critic_1")
 
