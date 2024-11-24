@@ -18,8 +18,13 @@ from ctrlsac_agent import CTRLSACAgent
 from omni.isaac.lab.utils.dict import print_dict
 import os
 import gymnasium as gym
-# import gym
 import numpy as np
+import optuna
+
+import optuna
+from optuna.trial import Trial
+from optuna.pruners import MedianPruner
+
 
 # seed for reproducibility
 set_seed(42)  # e.g. `set_seed(42)` for fixed seed
@@ -31,7 +36,7 @@ env = load_isaaclab_env(task_name="Isaac-Quadcopter-Trajectory-Direct-v0", num_e
 
 video_kwargs = {
     "video_folder": os.path.join("runs/torch/Quadcopter-Trajectory", "videos", "train"),
-    "step_trigger": lambda step: step % 2000== 0,
+    "step_trigger": lambda step: step % 10000== 0,
     "video_length": 400,
     "disable_logger": True,
 }
@@ -53,8 +58,8 @@ actor_hidden_dim = 256
 actor_hidden_depth = 2
 
 # define feature dimension 
-feature_dim = 2048
-feature_hidden_dim = 1024
+feature_dim = 512
+feature_hidden_dim = 256
 
 # instantiate the agent's models (function approximators).
 # SAC requires 5 models, visit its documentation for more details
@@ -124,48 +129,80 @@ models["mu"] = Mu(
 
 # configure and instantiate the agent (visit its documentation to see all the options)
 # https://skrl.readthedocs.io/en/latest/api/agents/sac.html#configuration-and-hyperparameters
-cfg = SAC_DEFAULT_CONFIG.copy()
-cfg["gradient_steps"] = 1
-cfg["batch_size"] = 256
-cfg["discount_factor"] = 0.99
-cfg["polyak"] = 0.005
-cfg["actor_learning_rate"] = 1e-4/3
-cfg["critic_learning_rate"] = 1e-4/3
-cfg["weight_decay"] = 0
-cfg["feature_learning_rate"] = 1e-4
-cfg["random_timesteps"] = 25e3
-cfg["learning_starts"] = 25e3
-cfg["grad_norm_clip"] = 0
-cfg["learn_entropy"] = True
-cfg["entropy_learning_rate"] = 5e-3
-cfg["initial_entropy_value"] = 1.0
-# cfg["state_preprocessor"] = RunningStandardScaler
-# cfg["state_preprocessor_kwargs"] = {"size": env.observation_space, "device": device}
+BASELINE_CFG = SAC_DEFAULT_CONFIG.copy()
+BASELINE_CFG["gradient_steps"] = 1
+BASELINE_CFG["batch_size"] = 256
+BASELINE_CFG["discount_factor"] = 0.99
+BASELINE_CFG["polyak"] = 0.005
+BASELINE_CFG["actor_learning_rate"] = 1e-4
+BASELINE_CFG["critic_learning_rate"] = 1e-4
+BASELINE_CFG["weight_decay"] = 0
+BASELINE_CFG["feature_learning_rate"] = 1e-4
+BASELINE_CFG["random_timesteps"] = 800
+BASELINE_CFG["learning_starts"] = 800
+BASELINE_CFG["grad_norm_clip"] = 0.0
+BASELINE_CFG["learn_entropy"] = True
+BASELINE_CFG["entropy_learning_rate"] = 1e-4
+BASELINE_CFG["initial_entropy_value"] = 1.0
 # logging to TensorBoard and write checkpoints (in timesteps)
-cfg["experiment"]["write_interval"] = 80
-cfg["experiment"]["checkpoint_interval"] = 1000
-cfg["experiment"]["directory"] = "runs/torch/Quadcopter-Trajectory"
-cfg['use_feature_target'] = True
-cfg['extra_feature_steps'] = 3
-cfg['target_update_period'] = 2
+BASELINE_CFG["experiment"]["write_interval"] = 800
+BASELINE_CFG["experiment"]["checkpoint_interval"] = 8000
+BASELINE_CFG["experiment"]["directory"] = "runs/torch/Quadcopter-Trajectory"
+BASELINE_CFG['use_feature_target'] = True
+BASELINE_CFG['extra_feature_steps'] = 2
+BASELINE_CFG['target_update_period'] = 1
 
+def objective(trial: Trial):
+    # Suggest hyperparameters to optimize
+    feature_learning_rate = trial.suggest_loguniform("feature_learning_rate", 1e-6, 1e-3)
+    critic_learning_rate = trial.suggest_loguniform("critic_learning_rate", 1e-6, 1e-3)
+    actor_learning_rate = trial.suggest_loguniform("actor_learning_rate", 1e-6, 1e-3)
+    extra_feature_steps = trial.suggest_int("extra_feature_steps", 1, 5)
+    
+    # Update the agent's configuration with the suggested hyperparameters
+    cfg = BASELINE_CFG.copy()
+    cfg["feature_learning_rate"] = feature_learning_rate
+    cfg["critic_learning_rate"] = critic_learning_rate
+    cfg["actor_learning_rate"] = actor_learning_rate
+    cfg["extra_feature_steps"] = extra_feature_steps
 
+    # Initialize the agent and trainer
+    agent = CTRLSACAgent(
+        models=models,
+        memory=memory,
+        cfg=cfg,
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        device=device
+    )
+    cfg_trainer = {"timesteps": int(1e5), "headless": True}
+    trainer = StepTrainer(env=env, agents=agent, cfg=cfg_trainer)
 
-agent = CTRLSACAgent(
-            models=models,
-            memory=memory,
-            cfg=cfg,
-            observation_space=env.observation_space,
-            action_space=env.action_space,
-            device=device
-        )
+    # Training loop with intermediate pruning
+    cumulative_reward = 0
+    for timestep in range(cfg_trainer["timesteps"]):
+        _, rewards, _, _, _ = trainer.train(timestep=timestep)
+        cumulative_reward += rewards.mean().item()
 
-# configure and instantiate the RL trainer
-cfg_trainer = {"timesteps": int(1e6), "headless": True}
-trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
+        # Report the intermediate results to Optuna
+        trial.report(cumulative_reward / (timestep + 1), step=timestep)
 
+        # Check if the trial should be pruned
+        if trial.should_prune():
+            raise optuna.TrialPruned()
+    
+    # Return the final performance metric (e.g., average cumulative reward)
+    return cumulative_reward / cfg_trainer["timesteps"]
 
-# train the agent(s)
-trainer.train()
+study = optuna.create_study(direction="maximize", pruner=MedianPruner())
+study.optimize(objective, n_trials=50, timeout=4500)  # 50 trials, 1-hour timeout
 
-# trainer.train()
+# Print the best hyperparameters
+print("Best trial:")
+print(f"  Value: {study.best_trial.value}")
+print(f"  Params: {study.best_trial.params}")
+
+# Save study for later analysis
+study_name = "sac_hyperparam_optimization"
+study_storage = f"sqlite:///{study_name}.db"
+optuna.study.create_study(study_name=study_name, storage=study_storage, direction="maximize")
