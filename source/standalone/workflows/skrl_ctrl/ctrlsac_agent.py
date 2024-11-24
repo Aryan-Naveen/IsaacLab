@@ -118,7 +118,7 @@ class CTRLSACAgent(SAC):
         qs, _, _ = self.critic_1({"z_phi": z_phi}, role="critic")
         q1_loss = F.mse_loss(target_q, qs[0])
         q2_loss = F.mse_loss(target_q, qs[1])
-        q_loss = q1_loss + q2_loss
+        q_loss = (q1_loss + q2_loss)/ 2
 
         self.critic_optimizer.zero_grad()
         q_loss.backward()

@@ -4,6 +4,21 @@ from skrl.models.torch import Model, DeterministicMixin
 import torch
 
 
+# class Critic(DeterministicMixin, Model):
+#     def __init__(self, observation_space, action_space, feature_dim, hidden_dim, device):
+#         Model.__init__(self, observation_space, action_space, device)
+#         DeterministicMixin.__init__(self)
+        
+#         self.feature_dim = feature_dim
+
+#         self.qnet = nn.Sequential(nn.Linear(feature_dim, hidden_dim),
+#                                  nn.ELU(),
+#                                  nn.Linear(hidden_dim, 1))
+
+#     def compute(self, inputs, role):
+#         q1 = self.qnet(inputs['z_phi'])
+#         return q1, {}
+
 class Critic(DeterministicMixin, Model):
     def __init__(self, observation_space, action_space, feature_dim, hidden_dim, device):
         Model.__init__(self, observation_space, action_space, device)
@@ -11,13 +26,18 @@ class Critic(DeterministicMixin, Model):
         
         self.feature_dim = feature_dim
 
-        self.qnet = nn.Sequential(nn.Linear(feature_dim, hidden_dim),
+        self.q1net = nn.Sequential(nn.Linear(feature_dim, hidden_dim),
+                                 nn.ELU(),
+                                 nn.Linear(hidden_dim, 1))
+        self.q2net = nn.Sequential(nn.Linear(feature_dim, hidden_dim),
                                  nn.ELU(),
                                  nn.Linear(hidden_dim, 1))
 
     def compute(self, inputs, role):
-        q1 = self.qnet(inputs['z_phi'])
-        return q1, {}
+
+        q1 = self.q1net(inputs['z_phi'])
+        q2 = self.q2net(inputs['z_phi'])
+        return (q1, q2), {}
 
 
 class TestCritic(DeterministicMixin, Model):
