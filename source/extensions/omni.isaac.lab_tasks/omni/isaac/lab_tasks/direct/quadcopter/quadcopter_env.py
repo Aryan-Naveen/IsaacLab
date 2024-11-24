@@ -144,7 +144,7 @@ class QuadcopterTrajectoryEnvCfg(DirectRLEnvCfg):
     )
 
     # scene
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=32, env_spacing=5, replicate_physics=True)
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=2.5, replicate_physics=True)
 
     # robot
     robot: ArticulationCfg = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
@@ -453,18 +453,39 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         self._robot.set_external_force_and_torque(self._thrust, self._moment, body_ids=self._body_id)
 
     def _get_observations(self) -> dict:
-        window_wp = []
-        window_vel = []
-        for i in range(self.num_envs):
-            desired_trajectory_window_b, _ = subtract_frame_transforms(
-                self._robot.data.root_state_w[i, :3].repeat(self.cfg.window, 1), self._robot.data.root_state_w[i, 3:7].repeat(self.cfg.window, 1), self._desired_trajectory_w[i, self.episode_timesteps[i]: self.episode_timesteps[i] + self.cfg.window]
-            )
-            desired_trajectory_vel_window_w = self._desired_trajectory_vel_w[i, self.episode_timesteps[i]: self.episode_timesteps[i] + self.cfg.window, :]
-            window_wp.append(desired_trajectory_window_b)
-            window_vel.append(desired_trajectory_vel_window_w)
+        # window_wp = []
+        # window_vel = []
+        # for i in range(self.num_envs):
+        #     desired_trajectory_window_b, _ = subtract_frame_transforms(
+        #         self._robot.data.root_state_w[i, :3].repeat(self.cfg.window, 1), self._robot.data.root_state_w[i, 3:7].repeat(self.cfg.window, 1), self._desired_trajectory_w[i, self.episode_timesteps[i]: self.episode_timesteps[i] + self.cfg.window]
+        #     )
+        #     desired_trajectory_vel_window_w = self._desired_trajectory_vel_w[i, self.episode_timesteps[i]: self.episode_timesteps[i] + self.cfg.window, :]
+        #     window_wp.append(desired_trajectory_window_b)
+        #     window_vel.append(desired_trajectory_vel_window_w)
         
-        window_wp = torch.stack(window_wp).view(self.num_envs, -1)        
-        window_vel = torch.stack(window_vel).view(self.num_envs, -1)
+        # window_wp = torch.stack(window_wp).view(self.num_envs, -1)        
+        # window_vel = torch.stack(window_vel).view(self.num_envs, -1)
+        # Repeat root states across the window dimension for all environments at once
+        root_positions_repeated = self._robot.data.root_state_w[:, :3].unsqueeze(1).repeat(1, self.cfg.window, 1)
+        root_quaternions_repeated = self._robot.data.root_state_w[:, 3:7].unsqueeze(1).repeat(1, self.cfg.window, 1)
+
+        # Gather the desired trajectory windows for all environments
+        window_indices = torch.arange(self.cfg.window).unsqueeze(0) + self.episode_timesteps.unsqueeze(1)  # Shape: (num_envs, window)
+        desired_trajectory_window_w = self._desired_trajectory_w[torch.arange(self.num_envs).unsqueeze(1), window_indices]
+
+        # Compute the frame transforms for all environments
+        desired_trajectory_window_b, _ = subtract_frame_transforms(
+            root_positions_repeated, root_quaternions_repeated, desired_trajectory_window_w
+        )
+
+        # Gather the desired trajectory velocity windows for all environments
+        desired_trajectory_vel_window_w = self._desired_trajectory_vel_w[torch.arange(self.num_envs).unsqueeze(1), window_indices, :]
+
+        # Reshape the results as needed
+        window_wp = desired_trajectory_window_b.view(self.num_envs, -1)  # Flatten along the window dimension
+        window_vel = desired_trajectory_vel_window_w.view(self.num_envs, -1)
+
+
         
         quat = self._robot.data.root_state_w[:, 3:7]
         obs = torch.cat(

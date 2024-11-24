@@ -7,7 +7,7 @@ from skrl.envs.loaders.torch import load_isaaclab_env
 from skrl.envs.wrappers.torch import wrap_env
 from skrl.memories.torch import RandomMemory
 from skrl.resources.preprocessors.torch import RunningStandardScaler
-from skrl.trainers.torch import SequentialTrainer, StepTrainer
+from skrl.trainers.torch import SequentialTrainer, StepTrainer, ParallelTrainer
 from skrl.utils import set_seed
 
 from sac.actor import DiagGaussianActor
@@ -162,7 +162,7 @@ agent = CTRLSACAgent(
 
 # configure and instantiate the RL trainer
 cfg_trainer = {"timesteps": int(1e6), "headless": True}
-trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
+trainer = ParallelTrainer(cfg=cfg_trainer, env=env, agents=agent)
 
 
 # train the agent(s)
