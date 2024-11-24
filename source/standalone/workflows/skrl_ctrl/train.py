@@ -27,7 +27,7 @@ set_seed(42)  # e.g. `set_seed(42)` for fixed seed
 
 cli_args = ["--video"]
 # load and wrap the Isaac Gym environment
-env = load_isaaclab_env(task_name="Isaac-Quadcopter-Trajectory-Direct-v0", num_envs=1024, cli_args=cli_args)
+env = load_isaaclab_env(task_name="Isaac-Quadcopter-Trajectory-Direct-v0", num_envs=2, cli_args=cli_args)
 
 video_kwargs = {
     "video_folder": os.path.join("runs/torch/Quadcopter-Trajectory", "videos", "train"),

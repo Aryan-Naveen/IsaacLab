@@ -470,7 +470,7 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         root_quaternions_repeated = self._robot.data.root_state_w[:, 3:7].unsqueeze(1).repeat(1, self.cfg.window, 1)
 
         # Gather the desired trajectory windows for all environments
-        window_indices = torch.arange(self.cfg.window).unsqueeze(0) + self.episode_timesteps.unsqueeze(1)  # Shape: (num_envs, window)
+        window_indices = torch.arange(self.cfg.window, device = self.device).unsqueeze(0) + self.episode_timesteps.unsqueeze(1)  # Shape: (num_envs, window)
         desired_trajectory_window_w = self._desired_trajectory_w[torch.arange(self.num_envs).unsqueeze(1), window_indices]
 
         # Compute the frame transforms for all environments
