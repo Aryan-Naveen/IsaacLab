@@ -171,10 +171,10 @@ class AnymalCJumpingEnvCfg(DirectRLEnvCfg):
     joint_torque_reward_scale = -2.5e-5
     joint_accel_reward_scale = -2.5e-7
     action_rate_reward_scale = -0.01
-    feet_air_time_reward_scale = 5.0
+    feet_air_time_reward_scale = 20.0
     undersired_contact_reward_scale = -1.0
     flat_orientation_reward_scale = -5.0
-    z_reward_scale = 100000.0
+    z_reward_scale = 20.0
 
 
 @configclass
