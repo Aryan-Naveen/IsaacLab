@@ -27,7 +27,7 @@ set_seed(42)  # e.g. `set_seed(42)` for fixed seed
 
 cli_args = ["--video"]
 # load and wrap the Isaac Gym environment
-env = load_isaaclab_env(task_name="Isaac-Quadcopter-Trajectory-Direct-v0", num_envs=64, cli_args=cli_args)
+env = load_isaaclab_env(task_name="Isaac-Quadcopter-Direct-v0", num_envs=128, cli_args=cli_args)
 
 video_kwargs = {
     "video_folder": os.path.join("runs/torch/QuadCopter-CTRL", "videos", "train"),
@@ -46,7 +46,7 @@ device = env.device
 
 
 # instantiate a memory as experience replay
-memory_size=int(1e5)
+memory_size=int(1)
 memory = RandomMemory(memory_size=memory_size, num_envs=env.num_envs, device=device)
 
 # define hidden dimension

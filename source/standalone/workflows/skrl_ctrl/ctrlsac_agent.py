@@ -236,19 +236,20 @@ class CTRLSACAgent(SAC):
         :param timesteps: Number of timesteps
         :type timesteps: int
         """
-        super().record_transition(states, actions, rewards, next_states, terminated, truncated, infos, timestep, timesteps)
-
-        if self.memory is not None:
-            # reward shaping
-            if self._rewards_shaper is not None:
-                rewards = self._rewards_shaper(rewards, timestep, timesteps)
-
-            # storage transition in memory
-            self.memory.add_samples(states=states, actions=actions, rewards=rewards, next_states=next_states,
-                                    terminated=terminated, truncated=truncated)
-            for memory in self.secondary_memories:
-                memory.add_samples(states=states, actions=actions, rewards=rewards, next_states=next_states,
-                                   terminated=terminated, truncated=truncated)
+        # super().record_transition(states, actions, rewards, next_states, terminated, truncated, infos, timestep, timesteps)
+        #
+        # if self.memory is not None:
+        #     # reward shaping
+        #     if self._rewards_shaper is not None:
+        #         rewards = self._rewards_shaper(rewards, timestep, timesteps)
+        #
+        #     # storage transition in memory
+        #     self.memory.add_samples(states=states, actions=actions, rewards=rewards, next_states=next_states,
+        #                             terminated=terminated, truncated=truncated)
+        #     for memory in self.secondary_memories:
+        #         memory.add_samples(states=states, actions=actions, rewards=rewards, next_states=next_states,
+        #                            terminated=terminated, truncated=truncated)
+        self.cur_data = (states, actions, rewards, next_states, terminated, truncated)
 
 
     def _update(self, timestep: int, timesteps: int) -> None:
@@ -260,7 +261,8 @@ class CTRLSACAgent(SAC):
         :type timesteps: int
         """
         for _ in range(self.extra_feature_steps+1):
-            sampled_states, sampled_actions, sampled_rewards, sampled_next_states, sampled_dones = self.memory.sample(names=self._tensors_names, batch_size=self._batch_size)[0]
+            # sampled_states, sampled_actions, sampled_rewards, sampled_next_states, sampled_dones = self.memory.sample(names=self._tensors_names, batch_size=self._batch_size)[0]
+            sampled_states, sampled_actions, sampled_rewards, sampled_next_states, sampled_dones = self.cur_data
             feature_loss = self.feature_step(sampled_states, sampled_actions, sampled_rewards, sampled_next_states, sampled_dones)
 
             if self.use_feature_target:
