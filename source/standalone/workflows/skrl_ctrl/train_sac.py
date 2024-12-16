@@ -11,6 +11,7 @@ from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.trainers.torch import SequentialTrainer
 from skrl.utils import set_seed
 from omni.isaac.lab.utils.dict import print_dict
+from sac.actor import DiagGaussianActor, StochasticActor, DiagGaussianActorPolicy
 import os
 import gymnasium as gym
 # import gym
@@ -19,6 +20,10 @@ import numpy as np
 
 # seed for reproducibility
 set_seed(42)  # e.g. `set_seed(42)` for fixed seed
+# define hidden dimension
+actor_hidden_dim = 512
+actor_hidden_depth = 3
+
 
 
 # define models (stochastic and deterministic models) using mixins
@@ -57,8 +62,8 @@ class Critic(DeterministicMixin, Model):
 # load and wrap the Isaac Lab environment
 cli_args = ["--video"]
 # load and wrap the Isaac Gym environment
-task_name = "Isaac-Quadcopter-Multi-Trajectory-Direct-v0"
-env = load_isaaclab_env(task_name=task_name, num_envs=64, cli_args=cli_args)
+task_name = "Isaac-Quadcopter-Linear-Trajectory-Direct-v0"
+env = load_isaaclab_env(task_name=task_name, num_envs=32, cli_args=cli_args)
 
 video_kwargs = {
     "video_folder": os.path.join("runs/torch/Quadcopter", "videos", "sac_train"),
@@ -85,7 +90,13 @@ memory = RandomMemory(memory_size=int(1e5), num_envs=env.num_envs, device=device
 # SAC requires 5 models, visit its documentation for more details
 # https://skrl.readthedocs.io/en/latest/api/agents/sac.html#models
 models = {}
-models["policy"] = StochasticActor(env.observation_space, env.action_space, device)
+# models["policy"] = DiagGaussianActorPolicy(env.observation_space, env.action_space, device)
+models["policy"] = DiagGaussianActorPolicy(observation_space = env.observation_space,
+                                     action_space = env.action_space, 
+                                     hidden_dim = actor_hidden_dim, 
+                                     hidden_depth = actor_hidden_depth,
+                                     log_std_bounds = [-5., 2.], 
+                                     device = device)
 models["critic_1"] = Critic(env.observation_space, env.action_space, device)
 models["critic_2"] = Critic(env.observation_space, env.action_space, device)
 models["target_critic_1"] = Critic(env.observation_space, env.action_space, device)
@@ -96,7 +107,7 @@ models["target_critic_2"] = Critic(env.observation_space, env.action_space, devi
 # https://skrl.readthedocs.io/en/latest/api/agents/sac.html#configuration-and-hyperparameters
 cfg = SAC_DEFAULT_CONFIG.copy()
 cfg["gradient_steps"] = 1
-cfg["batch_size"] = 1024
+cfg["batch_size"] = 256
 cfg["discount_factor"] = 0.99
 cfg["polyak"] = 0.005
 cfg["actor_learning_rate"] = 1e-4

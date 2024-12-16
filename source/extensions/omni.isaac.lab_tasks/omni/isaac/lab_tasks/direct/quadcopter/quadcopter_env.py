@@ -159,6 +159,12 @@ class QuadcopterTrajectoryLinearEnvCfg(DirectRLEnvCfg):
     thrust_rew_scale = 10
     torques_rew_scale = 1
     survival_rew_scale = 5
+    def __post_init__(self):
+        """Post initialization."""
+        # Set viewer settings
+        self.viewer.eye = [0.0, 4.0, 7.5]  # Positioned directly above
+        self.viewer.lookat = [1.0, 0.0, 0.0]  # Looking at the center of the environment
+        self.viewer.up = [0.0, 0.0, 0.0]  # Up direction is now along the y-axis
 
 
 @configclass
@@ -168,10 +174,23 @@ class QuadcopterTrajectoryMultiEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
 @configclass
 class QuadcopterTrajectoryDiagonalEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
     mode = 1
+    def __post_init__(self):
+        """Post initialization."""
+        # Set viewer settings
+        self.viewer.eye = [-0.0, 4.0, 7.5]  # Positioned directly above
+        self.viewer.lookat = [1.0, 4.0, 0.0]  # Looking at the center of the environment
+        self.viewer.up = [-1.0, 0.0, 0.0]  # Up direction is now along the y-axis
 
 @configclass
 class QuadcopterTrajectoryQuadraticEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
     mode = 2
+    def __post_init__(self):
+        """Post initialization."""
+        # Set viewer settings
+        self.viewer.eye = [-0.0, 4.0, 7.5]  # Positioned directly above
+        self.viewer.lookat = [1.0, 4.0, 0.0]  # Looking at the center of the environment
+        self.viewer.up = [-1.0, 0.0, 0.0]  # Up direction is now along the y-axis
+
     
 @configclass
 class QuadcopterTrajectoryOODEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
@@ -606,8 +625,6 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         died = torch.logical_or(self._robot.data.root_pos_w[:, 2] < 0.1, self._robot.data.root_pos_w[:, 2] > 2.0)
-        if died.sum() > 0:
-            print(self.episode_timesteps[died])
         return died, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):

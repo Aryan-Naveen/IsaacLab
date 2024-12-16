@@ -15,7 +15,8 @@ class Phi(DeterministicMixin, Model):
              action_space, 
               feature_dim, 
                hidden_dim, 
-            device
+            device,
+            multitask = False
         ):
         Model.__init__(self, observation_space, action_space, device)
         DeterministicMixin.__init__(self)
@@ -32,14 +33,6 @@ class Phi(DeterministicMixin, Model):
         self.l3 = nn.Linear(hidden_dim, feature_dim)
         self.layer_norm = nn.LayerNorm(feature_dim)
 
-  
-  
-        # self.net = nn.Sequential(nn.Linear(state_dim + action_dim, hidden_dim),
-        #                         nn.ELU(),
-        #                         nn.Linear(hidden_dim, hidden_dim),
-        #                         nn.ELU(),
-        #                         nn.Linear(hidden_dim, feature_dim)
-        #                     )
 
     def compute(self, inputs, role):
         x = torch.cat([inputs["states"], inputs["actions"]], axis=-1)
@@ -58,7 +51,8 @@ class Mu(DeterministicMixin, Model):
         action_space,
         feature_dim,
         hidden_dim,
-        device
+        device,
+        multitask = False
         ):
 
         Model.__init__(self, observation_space, action_space, device)
@@ -90,7 +84,8 @@ class Theta(DeterministicMixin, Model):
         observation_space,
         action_space,
         feature_dim,
-        device
+        device,
+        multitask = False
         ):
 
         Model.__init__(self, observation_space, action_space, device)

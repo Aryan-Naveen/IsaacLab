@@ -5,7 +5,7 @@ import torch
 
 
 class Critic(DeterministicMixin, Model):
-    def __init__(self, observation_space, action_space, feature_dim, device):
+    def __init__(self, observation_space, action_space, feature_dim, device, multitask=False):
         Model.__init__(self, observation_space, action_space, device)
         DeterministicMixin.__init__(self)
         
@@ -14,8 +14,17 @@ class Critic(DeterministicMixin, Model):
         self.net = nn.Sequential(nn.Linear(feature_dim, 1024),
                                  nn.ELU(),
                                  nn.Linear(1024, 1))
+
+        if multitask:
+            self.cnet = nn.Sequential(nn.Linear(taskstate_dim, 512),
+                                 nn.ELU(),
+                                 nn.Linear(512, cdims),
+                                 nn.Sigmoid())
+            
                                 
-                                
+
+    def compute_multitask(self, inputs, role):
+        task_feature = self.cnet(inputs['z_phi'])
 
     def compute(self, inputs, role):
         q = self.net(inputs['z_phi'])

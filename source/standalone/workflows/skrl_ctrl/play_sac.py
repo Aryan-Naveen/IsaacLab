@@ -10,11 +10,11 @@ from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.trainers.torch import SequentialTrainer, StepTrainer
 from skrl.utils import set_seed
 
-from sac.actor import DiagGaussianActor, StochasticActor
-from sac.critic import Critic, TestCritic
-from sac.feature import Phi, Mu, Theta
+from networks.actor import DiagGaussianActor, StochasticActor
+from networks.critic import Critic, TestCritic
+from networks.feature import Phi, Mu, Theta
 
-from ctrlsac_agent import CTRLSACAgent
+from agents.ctrlsac_agent import CTRLSACAgent
 from omni.isaac.lab.utils.dict import print_dict
 import os
 import gymnasium as gym
@@ -27,7 +27,7 @@ set_seed(42)  # e.g. `set_seed(42)` for fixed seed
 
 cli_args = ["--video"]
 # load and wrap the Isaac Gym environment
-task = "OOD"
+task = "Linear"
 env = load_isaaclab_env(task_name=f"Isaac-Quadcopter-{task}-Trajectory-Direct-v0", num_envs=1, cli_args=cli_args)
 
 
@@ -46,7 +46,7 @@ env = wrap_env(env)
 
 device = env.device
 
-experiment_length = int(250)
+experiment_length = int(300)
 # instantiate a memory as experience replay
 memory = RandomMemory(memory_size=experiment_length, num_envs=env.num_envs, device=device)
 
@@ -157,7 +157,7 @@ agent = SAC(
 
 ## Linear SAC: "/home/naliseas-workstation/Documents/anaveen/IsaacLab/runs/torch/Isaac-Quadcopter-Linear-Trajectory-Direct-v0/SAC/24-12-11_14-02-12-408306_SAC/checkpoints/best_agent.pt"
 ## Multi SAC: "/home/naliseas-workstation/Documents/anaveen/IsaacLab/runs/torch/Isaac-Quadcopter-Multi-Trajectory-Direct-v0/SAC/24-12-11_16-28-19-830592_SAC/checkpoints/best_agent.pt"
-agent.load("/home/naliseas-workstation/Documents/anaveen/IsaacLab/runs/torch/Isaac-Quadcopter-Multi-Trajectory-Direct-v0/SAC/24-12-11_16-28-19-830592_SAC/checkpoints/best_agent.pt")
+agent.load("/home/naliseas-workstation/Documents/anaveen/IsaacLab/runs/torch/Isaac-Quadcopter-Linear-Trajectory-Direct-v0/SAC/24-12-11_14-02-12-408306_SAC/checkpoints/best_agent.pt")
 
 cfg_trainer = {"timesteps": experiment_length, "headless": True}
 env.eval_mode()
