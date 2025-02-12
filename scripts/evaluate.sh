@@ -29,10 +29,10 @@ run_command() {
     # Run the isaaclab.sh command silently with dynamic agent type
     ./isaaclab.sh -p source/standalone/workflows/skrl_ctrl/eval.py \
         --agent_type "$AGENT_TYPE" \
-        --experiment legeval \
+        --experiment legeval-predef \
         --ckpt "$FILENAME" \
         --folder "$CHECKPOINT_FOLDER" \
-        --headless > /dev/null 2>&1
+        --headless > eval.log 2>&1
 
     # Update progress
     (

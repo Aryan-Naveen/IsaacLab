@@ -166,7 +166,7 @@ class QuadcopterTrajectoryLinearEnvCfg(DirectRLEnvCfg):
     
     curriculum = False
     profile = [10]
-    total_iterations = 5e5
+    total_iterations = 3e5
     buffer_history = 100
 
 
@@ -213,6 +213,7 @@ class QuadcopterTrajectoryLinearEnvCfg(DirectRLEnvCfg):
     thrust_rew_scale = 10
     torques_rew_scale = 1
     survival_rew_scale = 5
+    predefined_task_coeff = None
     
     if include_coeffecients:
         num_observations += 7
@@ -266,6 +267,21 @@ class QuadcopterTrajectoryTrainingRandomTaskEnvCfg(QuadcopterTrajectoryLinearEnv
 @configclass
 class QuadcopterTrajectoryLegendreEvalEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
     mode = 7
+
+@configclass
+class QuadcopterTrajectoryPreDefEvalEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
+    mode = 7
+    np.random.seed(42)
+    # predefined_task_coeff = np.zeros((110, 7))
+    # predefined_task_coeff[:, :3] = np.random.randn(110, 3)
+    predefined_task_coeff = [[0, 0, 0, 0, 0, 1, 0]]
+    
+@configclass
+class QuadcopterTrajectoryDownStreamFinetuneEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
+    mode = 7
+    predefined_task_coeff = [[0, 0, 0, 0, 0, 1, 0]]
+    total_iterations = int(5e4)
+
 
 @configclass
 class QuadcopterTrajectoryLegendreOODEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
@@ -510,7 +526,7 @@ def initialize_model(train_x, train_y, device):
     return gp, mll
 
 class PolynomialTrajectoryGenerator:
-    def __init__(self, device, num_envs, max_traj_dur= 10, freq=100, vn=0.5, mode=0, num_trials=1000, eval_mode=False, buffer_history=100, noise=False):
+    def __init__(self, device, num_envs, max_traj_dur= 10, freq=100, vn=0.5, mode=0, num_trials=1000, eval_mode=False, buffer_history=100, noise=False, predef_coeff=None):
         self.N = int(max_traj_dur*freq)
         self.vn = vn
         self.H = max_traj_dur
@@ -585,14 +601,21 @@ class PolynomialTrajectoryGenerator:
         elif mode == 7:
             self.coefficients = torch.tensor([])
             self.legendre = torch.tensor([])
-            for _ in tqdm(range(num_trials)):
-                coeffs, poly = self.generate_legendre_coeffecients(5, eval=True, returnpoly=True)
-                self.coefficients = torch.cat([self.coefficients, torch.tensor(coeffs).unsqueeze(0)], dim=0)
-                self.legendre = torch.cat([self.legendre, torch.tensor(poly.coef).unsqueeze(0)], dim = 0)
+            if predef_coeff is not None:
+                for coeff in predef_coeff:
+                    coeffs, poly = self.convert_predefined_coeffecients(coeff, returnpoly=True)
+                    self.coefficients = torch.cat([self.coefficients, torch.tensor(coeffs).unsqueeze(0)], dim=0)
+                    self.legendre = torch.cat([self.legendre, torch.tensor(poly.coef).unsqueeze(0)], dim = 0)                    
+            else:                
+                for _ in tqdm(range(num_trials)):
+                    coeffs, poly = self.generate_legendre_coeffecients(5, eval=True, returnpoly=True)
+                    self.coefficients = torch.cat([self.coefficients, torch.tensor(coeffs).unsqueeze(0)], dim=0)
+                    self.legendre = torch.cat([self.legendre, torch.tensor(poly.coef).unsqueeze(0)], dim = 0)
             
             self.coefficients = self.coefficients.float()     
             self.legendre = self.legendre.float()    
-            print(self.coefficients.shape)
+        
+            
 
         self.coefficients = self.coefficients.to(self.device)
         self.legendre = self.legendre.to(self.device)
@@ -615,6 +638,18 @@ class PolynomialTrajectoryGenerator:
         if returnpoly:
             return coeffs, legendre_poly
         return coeffs
+    
+    def convert_predefined_coeffecients(self, coeffs, returnpoly=False):
+        
+        legendre_poly = Legendre(coeffs, domain = [0, self.B])
+        coeffs = legendre_poly.convert(kind=P.Polynomial).coef
+        
+        coefficients = np.zeros(6,)
+        coefficients[1:coeffs.size] = coeffs[1:]
+        
+        if returnpoly:
+            return coefficients, legendre_poly
+        return coefficients
     
     def generate_tasks_explore(self, num_environments, eta=1e-4, sigma=1e-2):
         B = eta*torch.eye(self.legendre_task_dim, device=self.device) 
@@ -794,7 +829,7 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         self._thrust = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._moment = torch.zeros(self.num_envs, 1, 3, device=self.device)
         # Goal position
-        self._generator = PolynomialTrajectoryGenerator(self.device, self.num_envs, max_traj_dur = self.cfg.episode_length_s+0.25, freq=1/self.step_dt, mode=cfg.mode, buffer_history = cfg.buffer_history, noise = cfg.noise)
+        self._generator = PolynomialTrajectoryGenerator(self.device, self.num_envs, max_traj_dur = self.cfg.episode_length_s+0.25, freq=1/self.step_dt, mode=cfg.mode, buffer_history = cfg.buffer_history, noise = cfg.noise, predef_coeff=cfg.predefined_task_coeff)
         self.lvl = self.cfg.profile[0]
         self._desired_trajectory_w = torch.zeros(self.num_envs, self._generator.N, 3, device=self.device)
         self._active_trajectory_command = torch.zeros(self.num_envs, 7, device=self.device)

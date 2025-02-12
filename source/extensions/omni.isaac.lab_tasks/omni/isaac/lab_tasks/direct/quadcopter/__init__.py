@@ -111,6 +111,26 @@ gym.register(
     },
 )
 
+
+gym.register(
+    id="Isaac-Quadcopter-legeval-predef-Trajectory-Direct-v0",
+    entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": QuadcopterTrajectoryPreDefEvalEnvCfg
+    },
+)
+
+gym.register(
+    id="Isaac-Quadcopter-legtrain-finetune-Trajectory-Direct-v0",
+    entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": QuadcopterTrajectoryDownStreamFinetuneEnvCfg
+    },
+)
+
+
 gym.register(
     id="Isaac-Quadcopter-legood-Trajectory-Direct-v0",
     entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",

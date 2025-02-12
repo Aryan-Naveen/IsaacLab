@@ -25,10 +25,19 @@ from omni.isaac.lab.app import AppLauncher
 from pathlib import Path
 
 
+experiments = {
+    "legeval": [515, False, 100],
+    "legeval-predef": [515, False, 1],
+    "legood": [500, True, 1],
+    "OOD": [500, True, 1],
+    "legtrain": [3000, True, 1]
+}
+
+
 parser = argparse.ArgumentParser(description="Run the eval script with customizable parameters.")
 # Add arguments
-parser.add_argument("--experiment", type=str, default="OOD", choices=["legeval", "legood", "OOD", "legtrain"], help="Specify the task name (default: OOD).")
-parser.add_argument("--agent_type", type=str, default="CTRLSAC", choices=["CTRLSAC", "SAC"], help="Specify the agent type (default: CTRLSAC).")
+parser.add_argument("--experiment", type=str, default="legeval-predef", choices=experiments.keys(), help="Specify the task name (default: OOD).")
+parser.add_argument("--agent_type", type=str, default="CTRLSAC-multi", choices=["CTRLSAC-multi", "SAC", "CTRLSAC"], help="Specify the agent type (default: CTRLSAC).")
 parser.add_argument("--ckpt", type=str, default="-1", help="Specify the checkpoint name (default: best_agent).")
 parser.add_argument("--folder", type=str)
 # append AppLauncher cli args
@@ -44,20 +53,13 @@ set_seed(42)  # e.g. `set_seed(42)` for fixed seed
 
 
 cli_args = ["--video"]
-# load and wrap the Isaac Gym environment
-experiments = {
-    "legeval": [515, False],
-    "legood": [500, True],
-    "OOD": [500, True],
-    "legtrain": [3000, True]
-}
 
 
 
 experiment_length = experiments[task][0]
 record_video = experiments[task][1] 
 output_dir = f"runs/experiments/{task}/{agent_type}/{folder.split('/')[-4]}"
-
+num_envs = experiments[task][2] 
 video_kwargs = {
     "video_folder": os.path.join(output_dir, "videos"),
     "step_trigger": lambda step: step % 10000== 0,
@@ -66,7 +68,7 @@ video_kwargs = {
 }
 print("[INFO] Recording videos during training.")
 print_dict(video_kwargs, nesting=4)
-env = load_isaaclab_env(task_name=f"Isaac-Quadcopter-{task}-Trajectory-Direct-v0", num_envs=100, cli_args=cli_args)
+env = load_isaaclab_env(task_name=f"Isaac-Quadcopter-{task}-Trajectory-Direct-v0", num_envs=num_envs, cli_args=cli_args)
 
 if record_video: env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
@@ -93,8 +95,9 @@ cdim = 512
 # state dimensions
 task_state_dim = 67
 drone_state_dim = 13
-multitask=True
-
+multitask = agent_type == 'CTRLSAC-multi'
+if agent_type == 'CTRLSAC-multi':
+    agent_type = 'CTRLSAC'
 
 agentclasses = {
     "CTRLSAC": CTRLSACAgent,
@@ -237,6 +240,8 @@ cfg['extra_feature_steps'] = 1
 cfg['target_update_period'] = 1
 cfg['eval'] = True
 cfg['alpha'] = None
+
+
 
 
 AgentClass = agentclasses[agent_type]
