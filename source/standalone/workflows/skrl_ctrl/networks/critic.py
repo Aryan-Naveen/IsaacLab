@@ -14,13 +14,13 @@ class Critic(DeterministicMixin, Model):
         
 
         if multitask:
-            self.net = nn.Sequential(nn.Linear(feature_dim + cdim, 1024),
+            self.net = nn.Sequential(nn.Linear(2*feature_dim, 1024),
                             nn.ELU(),
                             nn.Linear(1024, 1))
 
-            self.cnet = nn.Sequential(nn.Linear(task_state_dim, 512),
+            self.w = nn.Sequential(nn.Linear(task_state_dim, 512),
                                  nn.ELU(),
-                                 nn.Linear(512, cdim),
+                                 nn.Linear(512, feature_dim),
                                  nn.Sigmoid())
 
         else:
@@ -31,10 +31,12 @@ class Critic(DeterministicMixin, Model):
                                 
 
     def compute_multitask(self, inputs):
-        task_feature = self.cnet(inputs['task_states'])
-        ## concatenate task_feature and inputs['z_phi']
-        q = self.net(torch.cat([inputs['z_phi'], task_feature], dim=1))
+        task_weight = self.w(inputs['task_states'])
+        # q = torch.einsum("ij,ij->i", inputs['z_phi'], task_weight).unsqueeze(1)
+        q = self.net(torch.cat([inputs['z_phi'], task_weight], dim= 1))
         return q
+    
+    
     
     def compute_standard(self, inputs):
         return self.net(inputs['z_phi'])
@@ -43,6 +45,7 @@ class Critic(DeterministicMixin, Model):
         q = self.compute_multitask(inputs) if self.multitask else self.compute_standard(inputs)
         return q, {}
 
+        
 
 class SACCritic(DeterministicMixin, Model):
     def __init__(self, observation_space, action_space, feature_dim, device, clip_actions=False):
