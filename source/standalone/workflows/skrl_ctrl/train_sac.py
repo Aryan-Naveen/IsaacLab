@@ -11,6 +11,7 @@ from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.trainers.torch import SequentialTrainer
 from skrl.utils import set_seed
 from omni.isaac.lab.utils.dict import print_dict
+from networks.actor import DiagGaussianActor, DiagGaussianActorPolicy
 import os
 import gymnasium as gym
 # import gym
@@ -19,6 +20,10 @@ import numpy as np
 
 # seed for reproducibility
 set_seed(42)  # e.g. `set_seed(42)` for fixed seed
+# define hidden dimension
+actor_hidden_dim = 512
+actor_hidden_depth = 3
+
 
 
 # define models (stochastic and deterministic models) using mixins
@@ -57,11 +62,14 @@ class Critic(DeterministicMixin, Model):
 # load and wrap the Isaac Lab environment
 cli_args = ["--video"]
 # load and wrap the Isaac Gym environment
-task_name = "Isaac-Quadcopter-Multi-Trajectory-Direct-v0"
-env = load_isaaclab_env(task_name=task_name, num_envs=64, cli_args=cli_args)
+task_version = "legtrain-finetune"
+finetune = task_version == 'legtrain-finetune'
+task_name = f"Isaac-Quadcopter-{task_version}-Trajectory-Direct-v0"
+num_envs = 32 if not finetune else 1
+env = load_isaaclab_env(task_name=task_name, num_envs=num_envs, cli_args=cli_args)
 
 video_kwargs = {
-    "video_folder": os.path.join("runs/torch/Quadcopter", "videos", "sac_train"),
+    "video_folder": os.path.join(f"runs/torch/{task_version}/", "videos", "train", "SAC"),
     "step_trigger": lambda step: step % 10000== 0,
     "video_length": 400,
     "disable_logger": True,
@@ -96,20 +104,20 @@ models["target_critic_2"] = Critic(env.observation_space, env.action_space, devi
 # https://skrl.readthedocs.io/en/latest/api/agents/sac.html#configuration-and-hyperparameters
 cfg = SAC_DEFAULT_CONFIG.copy()
 cfg["gradient_steps"] = 1
-cfg["batch_size"] = 1024
+cfg["batch_size"] = 256
 cfg["discount_factor"] = 0.99
 cfg["polyak"] = 0.005
 cfg["actor_learning_rate"] = 1e-4
 cfg["critic_learning_rate"] = 1e-4
-cfg["random_timesteps"] = 25e3
-cfg["learning_starts"] = 25e3
+cfg["random_timesteps"] = 12e3 if not finetune else 0
+cfg["learning_starts"] = 12e3 if not finetune else 25e3
 cfg["grad_norm_clip"] = 0
-cfg["learn_entropy"] = True
+cfg["learn_entropy"] = True if not finetune else False
 cfg["entropy_learning_rate"] = 1e-4
-cfg["initial_entropy_value"] = 1.0
+cfg["initial_entropy_value"] = 1.0 if not finetune else 0.06
 # logging to TensorBoard and write checkpoints (in timesteps)
-cfg["experiment"]["write_interval"] = 800
-cfg["experiment"]["checkpoint_interval"] = 8000
+cfg["experiment"]["write_interval"] = 1000
+cfg["experiment"]["checkpoint_interval"] = 10000 if not finetune else 1000
 cfg["experiment"]["directory"] = f"runs/torch/{task_name}/SAC"
 
 
@@ -122,10 +130,14 @@ agent = SAC(models=models,
 
 
 # configure and instantiate the RL trainer
-cfg_trainer = {"timesteps": int(5e5), "headless": True}
+timesteps = int(3e5) if not finetune else int(5e4)
+if finetune:
+    agent.load("/home/naliseas-workstation/Documents/anaveen/IsaacLab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/SAC/25-02-01_23-09-09-780539_SAC/checkpoints/agent_300000.pt")
+    memory.load("/home/naliseas-workstation/Documents/anaveen/IsaacLab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/SAC/memories/25-02-11_04-00-39-059963_memory_0x7fb974303e50.pt")
+
+cfg_trainer = {"timesteps": timesteps, "headless": True, "environment_info": "log"}
 trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
-
-
+memory.save(cfg["experiment"]["directory"], format = 'pt')
 
 # start training
 trainer.train()
