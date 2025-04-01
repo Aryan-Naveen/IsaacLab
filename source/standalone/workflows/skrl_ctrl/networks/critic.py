@@ -14,14 +14,17 @@ class Critic(DeterministicMixin, Model):
         
 
         if multitask:
-            self.net = nn.Sequential(nn.Linear(2*feature_dim, 1024),
-                            nn.ELU(),
-                            nn.Linear(1024, 1))
-
-            self.w = nn.Sequential(nn.Linear(task_state_dim, 512),
-                                 nn.ELU(),
-                                 nn.Linear(512, feature_dim),
-                                 nn.Sigmoid())
+            self.W = nn.Parameter(torch.zeros(feature_dim, cdim))
+            
+            self.Omega = nn.Sequential(nn.Linear(task_state_dim, 512),
+                                       nn.ELU(),
+                                       nn.Linear(512, cdim),
+                                       nn.Sigmoid())
+            
+            
+            self.mlp = nn.Sequential(nn.Linear(feature_dim + cdim, 1024),
+                                     nn.ELU(),
+                                     nn.Linear(1024, 1))
 
         else:
             self.net = nn.Sequential(nn.Linear(feature_dim, 1024),
@@ -31,10 +34,10 @@ class Critic(DeterministicMixin, Model):
                                 
 
     def compute_multitask(self, inputs):
-        task_weight = self.w(inputs['task_states'])
-        # q = torch.einsum("ij,ij->i", inputs['z_phi'], task_weight).unsqueeze(1)
-        q = self.net(torch.cat([inputs['z_phi'], task_weight], dim= 1))
-        return q
+        omega = self.Omega(inputs['task_states'])
+        q = torch.einsum('ij,ij->i', inputs['z_phi'] @ self.W, omega)         
+                        
+        return self.mlp(torch.cat([inputs['z_phi'], omega], dim= 1))
     
     
     

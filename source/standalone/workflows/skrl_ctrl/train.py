@@ -28,7 +28,7 @@ from omni.isaac.lab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Run the eval script with customizable parameters.")
 # Add arguments
-parser.add_argument("--env_version", type=str, default="legtrain-active-bo")
+parser.add_argument("--env_version", type=str, default="legtrain")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # Parse arguments
@@ -54,6 +54,7 @@ video_kwargs = {
     "video_length": 400,
     "disable_logger": True,
 }
+
 print("[INFO] Recording videos during training.")
 print_dict(video_kwargs, nesting=4)
 env = gym.wrappers.RecordVideo(env, **video_kwargs)
@@ -205,8 +206,8 @@ agent = CTRLSACAgent(
         )
 
 timesteps = int(3e5) if not finetune else int(5e4)
-if finetune:
-    agent.load("/home/naliseas-workstation/Documents/anaveen/IsaacLab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/CTRL-SAC/25-02-01_23-07-59-960690_CTRLSACAgent/checkpoints/agent_300000.pt")
+# if finetune:
+#     agent.load("/home/naliseas-workstation/Documents/anaveen/IsaacLab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/CTRL-SAC/25-02-01_23-07-59-960690_CTRLSACAgent/checkpoints/agent_300000.pt")
 
 cfg_trainer = {"timesteps": timesteps, "headless": True, "environment_info": "log"}
 trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
