@@ -78,10 +78,20 @@ RUN touch /bin/nvidia-smi && \
     mkdir -p /var/run/nvidia-persistenced && \
     touch /var/run/nvidia-persistenced/socket
 
+# pre-install pip and tqdm to avoid long resolver backtracking during isaaclab install
+RUN ${ISAACLAB_PATH}/_isaac_sim/python.sh -m pip install --upgrade pip==24.0 tqdm==4.67.1
+
 # installing Isaac Lab dependencies
 # use pip caching to avoid reinstalling large packages
 RUN --mount=type=cache,target=${DOCKER_USER_HOME}/.cache/pip \
     ${ISAACLAB_PATH}/isaaclab.sh --install
+
+# Override PyTorch stack with Blackwell (CU128) builds and required extras
+RUN ${ISAACLAB_PATH}/_isaac_sim/python.sh -m pip install --upgrade \
+    --extra-index-url https://download.pytorch.org/whl/cu128 \
+    "torch==2.9.0" "torchvision" "torchaudio" && \
+    ${ISAACLAB_PATH}/_isaac_sim/python.sh -m pip install \
+    "botorch==0.10.0" "gpytorch==1.11" "warp-lang==1.2.0" "wandb==0.23.1"
 
 # aliasing isaaclab.sh and python for convenience
 RUN echo "export ISAACLAB_PATH=${ISAACLAB_PATH}" >> ${HOME}/.bashrc && \

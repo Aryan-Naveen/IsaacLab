@@ -191,6 +191,18 @@ cfg['target_update_period'] = 1
 cfg['eval'] = False
 
 cfg["experiment"]["directory"] = f"runs/torch/{task_name}/CTRL-SAC-{multitask}/"
+cfg["experiment"]["wandb"] = True
+cfg["experiment"]["wandb_kwargs"] = {
+    "project": "Isaac-Lab-Quadcopter-CTRL-SAC",
+    "name": f"{task_name}-CTRL-SAC-{multitask}",
+    "config": {
+        "task": task_name,
+        "num_envs": num_envs,
+        "multitask": multitask,
+        "actor_hidden_dim": 512,
+        "feature_dim": 512,
+    }
+}
 cfg['alpha'] = 1e-3
 
 cfg['memory'] = None if not finetune else None

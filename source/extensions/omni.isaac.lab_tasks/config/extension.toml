@@ -19,10 +19,10 @@ keywords = ["robotics", "rl", "il", "learning"]
 requirements = [
     "h5py",
     "tensorboard",
-    "stable-baselines3>=2.1",
+    "stable-baselines3==2.1.0",
     "rl-games==1.6.1",
-    "rsl-rl@git+https://github.com/leggedrobotics/rsl_rl.git",
-    "skrl>=1.3.0"
+    "skrl>=1.3.0",
+    "torchvision==0.19.0"
 ]
 
 modules = [
@@ -30,8 +30,8 @@ modules = [
     "tensorboard",
     "stable_baselines3",
     "rl_games",
-    "rsl_rl",
-    "skrl"
+    "skrl",
+    "torchvision"
 ]
 
 use_online_index=true

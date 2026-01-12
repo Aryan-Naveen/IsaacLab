@@ -22,7 +22,7 @@ INSTALL_REQUIRES = [
     # generic
     "numpy",
     "torch==2.4.0",
-    "torchvision>=0.14.1",  # ensure compatibility with torch 1.13.1
+    "torchvision==0.19.0",  # pinned to match torch 2.4.0
     # 5.26.0 introduced a breaking change, so we restricted it for now.
     # See issue https://github.com/tensorflow/tensorboard/issues/6808 for details.
     "protobuf>=3.20.2, < 5.0.0",
@@ -40,10 +40,11 @@ PYTORCH_INDEX_URL = ["https://download.pytorch.org/whl/cu118"]
 
 # Extra dependencies for RL agents
 EXTRAS_REQUIRE = {
-    "sb3": ["stable-baselines3>=2.1"],
+    "sb3": ["stable-baselines3==2.1.0"],
     "skrl": ["skrl>=1.3.0"],
     "rl-games": ["rl-games==1.6.1", "gym"],  # rl-games still needs gym :(
-    "rsl-rl": ["rsl-rl@git+https://github.com/leggedrobotics/rsl_rl.git"],
+    # Temporarily disable rsl-rl install to avoid torch>=2.6.0 constraint clash with torch==2.4.0
+    "rsl-rl": [],
     "robomimic": [],
 }
 # Add the names with hyphens as aliases for convenience

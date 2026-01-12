@@ -1059,7 +1059,7 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         default_root_state[:, :3] += self._terrain.env_origins[env_ids]
         
         
-        if self.cfg.curriculum: self.update_task_difficulty()
+        # if self.cfg.curriculum: self.update_task_difficulty()
 
 
             
