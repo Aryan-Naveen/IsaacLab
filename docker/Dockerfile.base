@@ -93,6 +93,10 @@ RUN ${ISAACLAB_PATH}/_isaac_sim/python.sh -m pip install --upgrade \
     ${ISAACLAB_PATH}/_isaac_sim/python.sh -m pip install \
     "botorch==0.10.0" "gpytorch==1.11" "warp-lang==1.2.0" "wandb==0.23.1"
 
+# Install debugpy and pybullet so remote debugging and PyBullet are available in the image
+# (pybullet is useful for environments that use Bullet physics or for testing on CPU)
+RUN ${ISAACLAB_PATH}/_isaac_sim/python.sh -m pip install --no-cache-dir debugpy
+
 # aliasing isaaclab.sh and python for convenience
 RUN echo "export ISAACLAB_PATH=${ISAACLAB_PATH}" >> ${HOME}/.bashrc && \
     echo "alias isaaclab=${ISAACLAB_PATH}/isaaclab.sh" >> ${HOME}/.bashrc && \

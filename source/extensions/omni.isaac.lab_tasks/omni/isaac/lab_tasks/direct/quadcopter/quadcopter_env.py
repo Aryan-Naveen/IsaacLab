@@ -38,7 +38,7 @@ from tqdm import tqdm
 from omni.isaac.lab_assets import CRAZYFLIE_CFG  # isort: skip
 from omni.isaac.lab.markers import CUBOID_MARKER_CFG  # isort: skip
 
-
+from copy import deepcopy
 
 class NormConstrainedUCB(UpperConfidenceBound):
     def __init__(self, model, beta=2.0, max_norm=1.0):
@@ -155,11 +155,14 @@ class QuadcopterTrajectoryLinearEnvCfg(DirectRLEnvCfg):
     decimation = 2
     num_actions = 4
     window = 10
-    num_observations = 13 + window*6
+    # num_observations = 13 + window*6
+    num_observations = 28
     num_states = 0
     debug_vis = True
     noise = False
     include_coeffecients = True
+    mellinger = True
+    include_pd = True
     thresh_div = 0.3
     thresh_stable = 1.5
     mode = 0
@@ -215,8 +218,19 @@ class QuadcopterTrajectoryLinearEnvCfg(DirectRLEnvCfg):
     survival_rew_scale = 5
     predefined_task_coeff = None
     
-    if include_coeffecients:
-        num_observations += 7
+    # Adjust num_observations in post-init so it can depend on other flags
+    # (for example, when `mellinger` is True the observation construction
+    # does not append the trajectory coefficients, so we must not include
+    # them in `num_observations`).
+    def __post_init__(self):
+        # base observation size for the trajectory environment
+        base_obs = 28
+        self.num_observations = base_obs
+        # only add coefficients to the observation length when not using
+        # the differentiable mellinger state (the code appends coefficients
+        # only in the non-mellinger branch of _get_observations)
+        if not getattr(self, "mellinger", False) and getattr(self, "include_coeffecients", False):
+            self.num_observations += 7
 
     def __post_init__(self):
         """Post initialization."""
@@ -412,6 +426,9 @@ class QuadcopterEnv(DirectRLEnv):
             ],
             dim=-1,
         )
+        # Sanity-check: ensure constructed observation matches declared size
+        if obs.dim() >= 2 and obs.shape[-1] != self.num_observations:
+            raise RuntimeError(f"Observation dimension mismatch: built obs has size {obs.shape[-1]} but cfg.num_observations={self.num_observations}")
         observations = {"policy": obs}
         return observations
 
@@ -524,6 +541,63 @@ def initialize_model(train_x, train_y, device):
     mll = ExactMarginalLogLikelihood(gp.likelihood, gp).to(device)
     fit_gpytorch_mll(mll)
     return gp, mll
+
+import torch
+import math
+
+def pybullet_getEulerFromQuaternion_torch(q):
+    """
+    q: Tensor of shape (N, 4) in PyBullet format [x, y, z, w]
+    returns: Tensor (N, 3) -> [roll, pitch, yaw]
+    """
+    x = q[:, 0]
+    y = q[:, 1]
+    z = q[:, 2]
+    w = q[:, 3]
+
+    sqx = x * x
+    sqy = y * y
+    sqz = z * z
+    squ = w * w
+
+    # sarg = -2*(x*z - w*y)
+    sarg = -2.0 * (x * z - w * y)
+
+    # Allocate outputs
+    roll  = torch.zeros_like(x)
+    pitch = torch.zeros_like(x)
+    yaw   = torch.zeros_like(x)
+
+    # Gimbal lock masks
+    mask_neg = sarg <= -0.99999
+    mask_pos = sarg >=  0.99999
+    mask_mid = ~(mask_neg | mask_pos)
+
+    # ---- sarg <= -0.99999 ----
+    roll[mask_neg]  = 0.0
+    pitch[mask_neg] = -0.5 * math.pi
+    yaw[mask_neg]   = 2.0 * torch.atan2(x[mask_neg], -y[mask_neg])
+
+    # ---- sarg >= 0.99999 ----
+    roll[mask_pos]  = 0.0
+    pitch[mask_pos] = 0.5 * math.pi
+    yaw[mask_pos]   = 2.0 * torch.atan2(-x[mask_pos], y[mask_pos])
+
+    # ---- normal case ----
+    roll[mask_mid] = torch.atan2(
+        2.0 * (y[mask_mid] * z[mask_mid] + w[mask_mid] * x[mask_mid]),
+        squ[mask_mid] - sqx[mask_mid] - sqy[mask_mid] + sqz[mask_mid]
+    )
+
+    pitch[mask_mid] = torch.asin(sarg[mask_mid])
+
+    yaw[mask_mid] = torch.atan2(
+        2.0 * (x[mask_mid] * y[mask_mid] + w[mask_mid] * z[mask_mid]),
+        squ[mask_mid] + sqx[mask_mid] - sqy[mask_mid] - sqz[mask_mid]
+    )
+
+    return torch.stack([roll, pitch, yaw], dim=1)
+
 
 class PolynomialTrajectoryGenerator:
     def __init__(self, device, num_envs, max_traj_dur= 10, freq=100, vn=0.5, mode=0, num_trials=1000, eval_mode=False, buffer_history=100, noise=False, predef_coeff=None):
@@ -858,10 +932,44 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         self._gravity_magnitude = torch.tensor(self.sim.cfg.gravity, device=self.device).norm()
         self._robot_weight = (self._robot_mass * self._gravity_magnitude).item()
 
+
+        self.reset_errors()
+
         # add handle for debug visualization (this is set to a valid handle inside set_debug_vis)
         self.set_debug_vis(self.cfg.debug_vis)
         
-        
+    
+    def reset_errors(self, idx = None):
+        if idx is None:
+            self.last_pos = deepcopy(self._robot.data.root_pos_w)
+            self.integral_pos_e = torch.zeros_like(self.last_pos)
+            self.last_rpy = deepcopy(pybullet_getEulerFromQuaternion_torch(self._robot.data.root_quat_w))
+            self.integral_rpy_e = torch.zeros_like(self.last_rpy)
+            return
+
+        self.last_pos[idx, :] = deepcopy(self._robot.data.root_pos_w[idx, :])
+        self.integral_pos_e[idx] = torch.zeros_like(self.last_pos[idx, :])
+        self.last_rpy[idx, :] = deepcopy(pybullet_getEulerFromQuaternion_torch(self._robot.data.root_quat_w[idx, :]))   
+        self.integral_rpy_e[idx] = torch.zeros_like(self.last_rpy[idx, :])
+
+
+    def update_int_errors(self, waypoints_wp, state, ctrl_freq):
+        self.integral_pos_e += waypoints_wp[:, :3] / self.step_dt
+        self.integral_rpy_e += state[:, 7:10] / self.step_dt
+
+
+    def update_diff_errors(self, state):
+        self.last_pos = deepcopy(state[:, :3])
+        self.last_rpy = deepcopy(state[:, 7:10])
+
+
+    def get_pos_error(self, state):
+        pos_error_d = (state[:, :3] - self.last_pos) * 1/ self.step_dt
+        pos_error_i = self.integral_pos_e
+        pos_error_i = torch.clamp(pos_error_i, -2.0, 2.0)
+        pos_error_i[:, 2] = torch.clamp(pos_error_i[:, 2], -0.15, 0.15)
+        return pos_error_i, pos_error_d
+
 
     def _configure_gym_env_spaces(self):
         """Configure the action and observation spaces for the Gym environment."""
@@ -926,6 +1034,16 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         # self.cfg.viewer.up = [-1.0, 0.0, 0.0]  # Keep the up direction the same
 
 
+    def getPybDroneVector(self):
+        state = torch.cat([
+                self._robot.data.root_state_w[:, :3],
+                self._robot.data.root_state_w[:, 3:7],
+                pybullet_getEulerFromQuaternion_torch(self._robot.data.root_state_w[:, 3:7]),
+                self._robot.data.root_state_w[:, 7:10],
+                self._robot.data.root_state_w[:, 10:]
+            ], dim=-1)
+        return state
+
     def _get_observations(self) -> dict:
         window_wp = []
         window_vel = []
@@ -944,26 +1062,60 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         window_vel = torch.stack(window_vel).view(self.num_envs, -1)
         
         quat = self._robot.data.root_state_w[:, 3:7]
-        obs = torch.cat(
-            [
-                self._robot.data.root_lin_vel_b,
-                self._robot.data.root_lin_vel_w,
-                self._robot.data.root_ang_vel_b,
-                quat,
-                window_wp,
-                window_vel
-            ],
-            dim=-1,
-        )
-        if self.cfg.include_coeffecients:
+        if not self.cfg.mellinger:
+            obs = torch.cat(
+                [
+                    self._robot.data.root_lin_vel_b,
+                    self._robot.data.root_lin_vel_w,
+                    self._robot.data.root_ang_vel_b,
+                    quat,
+                    window_wp,
+                    window_vel
+                ],
+                dim=-1,
+            )
+            if self.cfg.include_coeffecients:
+                obs = torch.cat(
+                    [
+                        obs,
+                        self._active_trajectory_command
+                    ],
+                    dim = -1
+                )
+        else:
+            state = self.getPybDroneVector()
+            state[:, :3] = window_wp[:, :3] #confirm
+            state[:, 8] = - state[:, 8]
+            state[:, 14] = - state[:, 14]
+            obs = torch.cat(
+                [
+                    state
+                ],
+                dim=-1,
+            )            
+        if self.cfg.include_pd:
+            self.update_int_errors(window_wp, state, 1/self.step_dt)
+            pos_error_i, pos_error_d = self.get_pos_error(state)
+            ang_error_d = (state[:, 7:10] - self.last_rpy) * 1/self.step_dt  # actually ang vel error
+            ang_error_i = self.integral_rpy_e
+            ang_error_i = torch.clip(ang_error_i, -np.pi, np.pi)
+            ang_error_i[:, 0:2] = torch.clip(ang_error_i[:, 0:2], -1, 1)
+            self.update_diff_errors(state)
             obs = torch.cat(
                 [
                     obs,
-                    self._active_trajectory_command
+                    pos_error_i,
+                    pos_error_d,
+                    ang_error_i,
+                    ang_error_d
                 ],
                 dim = -1
             )
             
+        # Sanity-check: ensure constructed observation matches declared size
+        if obs.dim() >= 2 and obs.shape[-1] != self.num_observations:
+            raise RuntimeError(f"Observation dimension mismatch: built obs has size {obs.shape[-1]} but cfg.num_observations={self.num_observations}")
+
         observations = {"policy": obs}
 
         self.episode_timesteps += 1
@@ -1077,6 +1229,7 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+        self.reset_errors(env_ids)
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # create markers if necessary for the first tome
