@@ -42,7 +42,8 @@ RUN --mount=type=cache,target=/var/cache/apt \
     cmake \
     git \
     libglib2.0-0 \
-    ncurses-term && \
+    ncurses-term \
+    vulkan-tools && \
     apt -y autoremove && apt clean autoclean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -51,6 +52,7 @@ COPY ../ ${ISAACLAB_PATH}
 
 # Set up a symbolic link between the installed Isaac Sim root folder and _isaac_sim in the Isaac Lab directory
 RUN ln -sf ${ISAACSIM_ROOT_PATH} ${ISAACLAB_PATH}/_isaac_sim
+
 
 # Install apt dependencies for extensions that declare them in their extension.toml
 RUN --mount=type=cache,target=/var/cache/apt \

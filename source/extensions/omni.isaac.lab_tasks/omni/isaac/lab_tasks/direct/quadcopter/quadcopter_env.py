@@ -155,12 +155,15 @@ class QuadcopterTrajectoryLinearEnvCfg(DirectRLEnvCfg):
     decimation = 2
     num_actions = 4
     window = 10
+
+    pid_obs = True
     # num_observations = 13 + window*6
-    num_observations = 28
+    # num_observations = 28 + window*6
+    num_observations = 11 + window*9 if pid_obs else 13 + window*6
     num_states = 0
     debug_vis = True
     noise = False
-    include_coeffecients = True
+    include_coeffecients = False
     mellinger = True
     include_pd = True
     thresh_div = 0.3
@@ -248,9 +251,9 @@ class QuadcopterTrajectoryMultiEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
 
 @configclass
 class QuadcopterTrajectoryLegendreTrainingEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
-    mode = 5
-    curriculum = True
-    profile = [3]
+    mode = 3
+    # curriculum = False
+    # profile = [3]
 
 @configclass
 class QuadcopterTrajectoryTrainingActiveBOTaskEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
@@ -547,13 +550,13 @@ import math
 
 def pybullet_getEulerFromQuaternion_torch(q):
     """
-    q: Tensor of shape (N, 4) in PyBullet format [x, y, z, w]
+    q: Tensor of shape (N, 4) in PyBullet format [w, x, y, z]
     returns: Tensor (N, 3) -> [roll, pitch, yaw]
     """
-    x = q[:, 0]
-    y = q[:, 1]
-    z = q[:, 2]
-    w = q[:, 3]
+    x = q[:, 1]
+    y = q[:, 2]
+    z = q[:, 3]
+    w = q[:, 0]
 
     sqx = x * x
     sqy = y * y
@@ -822,8 +825,27 @@ class PolynomialTrajectoryGenerator:
         velocities = torch.stack([vx, vy, vz], dim=2)  # Shape: (num_environments, self.N, 3)
         
         traj = torch.repeat_interleave(pos0, self.N, axis=1) + traj_        
+        # -----------------------------
+        # Desired yaw = direction of travel
+        # -----------------------------
+        desired_yaw = torch.atan2(vy, vx)  # (E, N)
 
-        return traj, velocities, selected_tasks        
+        # -----------------------------
+        # Roll and pitch (set to zero)
+        # -----------------------------
+        desired_roll = torch.zeros_like(desired_yaw)
+        desired_pitch = torch.zeros_like(desired_yaw)
+
+        # -----------------------------
+        # Stack into RPY
+        # -----------------------------
+        desired_rpy = torch.stack(
+            [desired_roll, desired_pitch, desired_yaw],
+            dim=2
+        )  # (E, N, 3)
+
+
+        return traj, velocities, desired_rpy, selected_tasks        
 
     def update_buffer(self, trajectories, performances):
         task_norms = torch.norm(trajectories, dim=1, keepdim=True) 
@@ -908,6 +930,7 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         self._desired_trajectory_w = torch.zeros(self.num_envs, self._generator.N, 3, device=self.device)
         self._active_trajectory_command = torch.zeros(self.num_envs, 7, device=self.device)
         self._desired_trajectory_vel_w = torch.zeros(self.num_envs, self._generator.N, 3, device=self.device)
+        self._desired_trajectory_rpy_w = torch.zeros(self.num_envs, self._generator.N, 3, device=self.device)
 
         self.episode_max_len = int(self.cfg.episode_length_s/ (self.step_dt))
 
@@ -933,12 +956,22 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         self._robot_weight = (self._robot_mass * self._gravity_magnitude).item()
 
 
-        self.reset_errors()
+        self.PID_reset_errors()
 
         # add handle for debug visualization (this is set to a valid handle inside set_debug_vis)
         self.set_debug_vis(self.cfg.debug_vis)
         
     
+    def PID_reset_errors(self, idx = None):
+        if idx is None:
+            self.last_rpy = deepcopy(pybullet_getEulerFromQuaternion_torch(self._robot.data.root_quat_w))
+            self.integral_pos_e = torch.zeros_like(self.last_rpy)
+            self.integral_rpy_e = torch.zeros_like(self.last_rpy)
+            return
+        self.last_rpy[idx, :] = deepcopy(pybullet_getEulerFromQuaternion_torch(self._robot.data.root_quat_w[idx, :]))
+        self.integral_pos_e[idx] = torch.zeros_like(self.last_rpy[idx, :])
+        self.integral_rpy_e[idx] = torch.zeros_like(self.last_rpy[idx, :])
+
     def reset_errors(self, idx = None):
         if idx is None:
             self.last_pos = deepcopy(self._robot.data.root_pos_w)
@@ -953,22 +986,85 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         self.integral_rpy_e[idx] = torch.zeros_like(self.last_rpy[idx, :])
 
 
-    def update_int_errors(self, waypoints_wp, state, ctrl_freq):
-        self.integral_pos_e += waypoints_wp[:, :3] / self.step_dt
-        self.integral_rpy_e += state[:, 7:10] / self.step_dt
+    def update_int_errors(self, waypoints_wp, waypoints_rpy, pos, quat):
+
+        pos_e = waypoints_wp[:, :3] - pos
+        self.integral_pos_e += pos_e * self.step_dt
+        self.integral_pos_e = torch.clamp(self.integral_pos_e, -2.0, 2.0)
+        self.integral_pos_e[:, 2] = torch.clamp(self.integral_pos_e[:, 2], -0.15, 0.15)
 
 
-    def update_diff_errors(self, state):
-        self.last_pos = deepcopy(state[:, :3])
-        self.last_rpy = deepcopy(state[:, 7:10])
+        w, x, y, z = quat.unbind(dim=1)
+
+        xx, yy, zz = x*x, y*y, z*z
+        xy, xz, yz = x*y, x*z, y*z
+        wx, wy, wz = w*x, w*y, w*z
+
+        cur_rotation = torch.stack([
+            1 - 2*(yy + zz), 2*(xy - wz),     2*(xz + wy),
+            2*(xy + wz),     1 - 2*(xx + zz), 2*(yz - wx),
+            2*(xz - wy),     2*(yz + wx),     1 - 2*(xx + yy)
+        ], dim=1).reshape(self.num_envs, 3, 3)
+
+        sy = torch.sqrt(cur_rotation[:, 0, 0]**2 + cur_rotation[:, 1, 0]**2)
+        singular = sy < 1e-6
+
+        roll  = torch.atan2(cur_rotation[:, 2, 1], cur_rotation[:, 2, 2])
+        pitch = torch.atan2(-cur_rotation[:, 2, 0], sy)
+        yaw   = torch.atan2(cur_rotation[:, 1, 0], cur_rotation[:, 0, 0])
+
+        roll_s  = torch.atan2(-cur_rotation[:, 1, 2], cur_rotation[:, 1, 1])
+        pitch_s = torch.atan2(-cur_rotation[:, 2, 0], sy)
+        yaw_s   = torch.zeros_like(yaw)
+
+        cur_rpy = torch.stack([
+            torch.where(singular, roll_s, roll),
+            torch.where(singular, pitch_s, pitch),
+            torch.where(singular, yaw_s, yaw)
+        ], dim=1)
+        rpy_rates = (cur_rpy - self.last_rpy) / self.step_dt
+        self.last_rpy = cur_rpy.detach()
+
+        cr, cp, cy = torch.cos(waypoints_rpy[:, :3]).unbind(dim=1)
+        sr, sp, sy_ = torch.sin(waypoints_rpy[:, :3]).unbind(dim=1)
+
+        target_rotation = torch.stack([
+            cy*cp, cy*sp*sr - sy_*cr, cy*sp*cr + sy_*sr,
+            sy_*cp, sy_*sp*sr + cy*cr, sy_*sp*cr - cy*sr,
+            -sp,   cp*sr,            cp*cr
+        ], dim=1).reshape(self.num_envs, 3, 3)
+
+        RtR = torch.matmul(target_rotation.transpose(1, 2), cur_rotation)
+        RRT = torch.matmul(cur_rotation.transpose(1, 2), target_rotation)
+        rot_matrix_e = RtR - RRT
+
+        rot_e = torch.stack([
+            rot_matrix_e[:, 2, 1],
+            rot_matrix_e[:, 0, 2],
+            rot_matrix_e[:, 1, 0]
+        ], dim=1)
+
+        self.integral_rpy_e -= rot_e * self.step_dt
+        self.integral_rpy_e = torch.clamp(self.integral_rpy_e, -1500.0, 1500.0)
+        self.integral_rpy_e[:, 0:2] = torch.clamp(
+            self.integral_rpy_e[:, 0:2], -1.0, 1.0
+        )
+
+        return rpy_rates, self.integral_rpy_e, self.integral_pos_e
 
 
-    def get_pos_error(self, state):
-        pos_error_d = (state[:, :3] - self.last_pos) * 1/ self.step_dt
-        pos_error_i = self.integral_pos_e
-        pos_error_i = torch.clamp(pos_error_i, -2.0, 2.0)
-        pos_error_i[:, 2] = torch.clamp(pos_error_i[:, 2], -0.15, 0.15)
-        return pos_error_i, pos_error_d
+
+    # def update_diff_errors(self, state):
+    #     self.last_pos = deepcopy(state[:, :3])
+    #     self.last_rpy = deepcopy(state[:, 7:10])
+
+
+    # def get_pos_error(self, state):
+    #     pos_error_d = (state[:, :3] - self.last_pos) * 1/ self.step_dt
+    #     pos_error_i = self.integral_pos_e
+    #     pos_error_i = torch.clamp(pos_error_i, -2.0, 2.0)
+    #     pos_error_i[:, 2] = torch.clamp(pos_error_i[:, 2], -0.15, 0.15)
+    #     return pos_error_i, pos_error_d
 
 
     def _configure_gym_env_spaces(self):
@@ -1045,6 +1141,8 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         return state
 
     def _get_observations(self) -> dict:
+        if self.cfg.pid_obs:
+            return self._get_pidobservations()
         window_wp = []
         window_vel = []
         for i in range(self.num_envs):
@@ -1062,59 +1160,25 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         window_vel = torch.stack(window_vel).view(self.num_envs, -1)
         
         quat = self._robot.data.root_state_w[:, 3:7]
-        if not self.cfg.mellinger:
-            obs = torch.cat(
-                [
-                    self._robot.data.root_lin_vel_b,
-                    self._robot.data.root_lin_vel_w,
-                    self._robot.data.root_ang_vel_b,
-                    quat,
-                    window_wp,
-                    window_vel
-                ],
-                dim=-1,
-            )
-            if self.cfg.include_coeffecients:
-                obs = torch.cat(
-                    [
-                        obs,
-                        self._active_trajectory_command
-                    ],
-                    dim = -1
-                )
-        else:
-            state = self.getPybDroneVector()
-            state[:, :3] = window_wp[:, :3] #confirm
-            state[:, 8] = - state[:, 8]
-            state[:, 14] = - state[:, 14]
-            obs = torch.cat(
-                [
-                    state
-                ],
-                dim=-1,
-            )            
-        if self.cfg.include_pd:
-            self.update_int_errors(window_wp, state, 1/self.step_dt)
-            pos_error_i, pos_error_d = self.get_pos_error(state)
-            ang_error_d = (state[:, 7:10] - self.last_rpy) * 1/self.step_dt  # actually ang vel error
-            ang_error_i = self.integral_rpy_e
-            ang_error_i = torch.clip(ang_error_i, -np.pi, np.pi)
-            ang_error_i[:, 0:2] = torch.clip(ang_error_i[:, 0:2], -1, 1)
-            self.update_diff_errors(state)
+        obs = torch.cat(
+            [
+                self._robot.data.root_lin_vel_b,
+                self._robot.data.root_lin_vel_w,
+                self._robot.data.root_ang_vel_b,
+                quat,
+                window_wp,
+                window_vel
+            ],
+            dim=-1,
+        )
+        if self.cfg.include_coeffecients:
             obs = torch.cat(
                 [
                     obs,
-                    pos_error_i,
-                    pos_error_d,
-                    ang_error_i,
-                    ang_error_d
+                    self._active_trajectory_command
                 ],
                 dim = -1
             )
-            
-        # Sanity-check: ensure constructed observation matches declared size
-        if obs.dim() >= 2 and obs.shape[-1] != self.num_observations:
-            raise RuntimeError(f"Observation dimension mismatch: built obs has size {obs.shape[-1]} but cfg.num_observations={self.num_observations}")
 
         observations = {"policy": obs}
 
@@ -1215,7 +1279,7 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
 
 
             
-        self._desired_trajectory_w[env_ids], self._desired_trajectory_vel_w[env_ids], self._active_trajectory_command[env_ids] = self._generator.generate_trajectory(default_root_state[:, :3], len(env_ids), env_ids, offset_r = self.radius, lvl = self.lvl)
+        self._desired_trajectory_w[env_ids], self._desired_trajectory_vel_w[env_ids], self._desired_trajectory_rpy_w[env_ids], self._active_trajectory_command[env_ids] = self._generator.generate_trajectory(default_root_state[:, :3], len(env_ids), env_ids, offset_r = self.radius, lvl = self.lvl)
 
         if self.eval:
             for env in env_ids:
@@ -1229,7 +1293,7 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(default_root_state[:, 7:], env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
-        self.reset_errors(env_ids)
+        self.PID_reset_errors(env_ids)
 
     def _set_debug_vis_impl(self, debug_vis: bool):
         # create markers if necessary for the first tome
@@ -1266,6 +1330,41 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         self.lvl = self.cfg.profile[int((self._sim_step_counter/(2*self.cfg.total_iterations))*len(self.cfg.profile))]
         
         
-            
+    def _get_pidobservations(self) -> dict:
+        window_wp = []
+        window_rpy = []
+        window_vel = []
+        for i in range(self.num_envs):
+            desired_trajectory_pos_window_w = self._desired_trajectory_w[i, self.episode_timesteps[i]: self.episode_timesteps[i] + self.cfg.window, :]  - self._terrain.env_origins[i]
+            desired_trajectory_vel_window_w = self._desired_trajectory_vel_w[i, self.episode_timesteps[i]: self.episode_timesteps[i] + self.cfg.window, :]
+            desired_trajectory_rpy_window_w = self._desired_trajectory_rpy_w[i, self.episode_timesteps[i]: self.episode_timesteps[i] + self.cfg.window, :]
+
+            window_wp.append(desired_trajectory_pos_window_w)
+            window_vel.append(desired_trajectory_vel_window_w)
+            window_rpy.append(desired_trajectory_rpy_window_w)
     
-    
+        cur_pos = self._robot.data.root_state_w[:, :3] - self._terrain.env_origins
+        cur_quat = self._robot.data.root_state_w[:, 3:7]
+        cur_vel = self._robot.data.root_lin_vel_w
+
+        window_wp = torch.stack(window_wp).view(self.num_envs, -1)        
+        window_vel = torch.stack(window_vel).view(self.num_envs, -1)
+        window_rpy = torch.stack(window_rpy).view(self.num_envs, -1)
+        
+        reset_mask = self.episode_timesteps == 0
+
+        obs = torch.cat(
+            [
+                cur_pos,
+                cur_quat,
+                cur_vel,
+                window_wp,
+                window_vel,
+                window_rpy,
+                reset_mask.unsqueeze(1).float(),
+            ],
+            dim=-1,
+        )       
+        observations = {"policy": obs}
+        self.episode_timesteps += 1
+        return observations 
