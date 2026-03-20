@@ -4,6 +4,8 @@ import math
 import torch
 from scipy.spatial.transform import Rotation
 import torch.nn as nn
+import torch.nn.init as init
+
 
 def weight_init(m):
     """Custom weight init for Conv2D and Linear layers."""
@@ -148,7 +150,7 @@ class PIDController(nn.Module):
         """
         super().__init__()
 
-        self.encode_lambda = 0.1
+        self.encode_lambda = 0.5
         # -------------------------------
         # Force PID coefficients
         # -------------------------------
@@ -199,10 +201,21 @@ class PIDController(nn.Module):
         # Task Encoder
         # -------------------------------
         self.task_encoder = nn.Sequential(
-            nn.Linear(90, 512), nn.ELU(),
+            nn.Linear(90, 512),
+            nn.LayerNorm(512),
+            nn.ELU(),
             nn.Linear(512, 256), nn.ELU(),
             nn.Linear(256, 9)
         ).to(device)
+        
+        def init_zeros(m):
+            if isinstance(m, nn.Linear):
+                nn.init.constant_(m.weight, 0.0)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0.0)
+
+        # self.task_encoder = nn.Linear(90, 9).to(device)
+        self.task_encoder.apply(init_zeros)        
 
         self.reset()
 
@@ -225,7 +238,7 @@ class PIDController(nn.Module):
         """Resets specific environment indices (Online mode)."""
         if not torch.is_tensor(idxs):
             idxs = torch.tensor(idxs, device=self.device, dtype=torch.long)
-        
+        assert self.integral_pos_e is not None and self.integral_rpy_e is not None
         # This works for both (N, 3) and (N, H, 3) due to broadcasting 0.0
         self.integral_pos_e[idxs] = 0.0
         self.integral_rpy_e[idxs] = 0.0
@@ -484,34 +497,39 @@ class PIDController(nn.Module):
 
         return rpm, torch.tanh(target_torques/self.moment_scale), next_state, next_last_rpy
 
-    def forward(self, obs):
+    def forward(self, obs, encoding=None):
         """
         Forward handles both:
         1. Online: (N, Obs) -> Uses self.integral buffers
         2. Offline: (B, T, Obs) -> Calculates integrals over T dimension
+
+        If encoding is provided (shape (B, 9)), it is used instead of
+        task_encoder(obs) to form target_pos, target_vel, target_rpy.
         """
         # Input Parsing
         B, total_dim = obs.shape
         if total_dim == 101:
-            return self._forward_online(obs)
+            return self._forward_online(obs, encoding=encoding)
         elif total_dim == 106:
-            return self._forward_offline_trajectory(obs)
+            return self._forward_offline_trajectory(obs, encoding=encoding)
         else:
             raise ValueError(f"Unsupported observation shape: {obs.shape}")
 
-    def _forward_online(self, obs):
+    def _forward_online(self, obs, encoding=None):
         cur_pos = obs[:, 0:3]
         cur_quat = obs[:, 3:7]
         cur_vel = obs[:, 7:10]
         mask = obs[:, -1]
-        
-        task_states = obs[:, 10:-1] 
+
+        task_states = obs[:, 10:-1]
         def_target_pos = task_states[:, 0:3]
         def_target_vel = task_states[:, 30:33]
         def_target_rpy = task_states[:, 60:63]
 
-
-        task_states_encoded = self.task_encoder(task_states)
+        if encoding is not None:
+            task_states_encoded = encoding
+        else:
+            task_states_encoded = self.task_encoder(task_states)
         target_pos = def_target_pos + self.encode_lambda * task_states_encoded[:, 0:3]
         target_vel = def_target_vel + self.encode_lambda * task_states_encoded[:, 3:6]
         target_rpy = def_target_rpy + self.encode_lambda * task_states_encoded[:, 6:9]
@@ -523,7 +541,7 @@ class PIDController(nn.Module):
             target_pos, target_rpy, target_vel, mask
         )
 
-    def _forward_offline_trajectory(self, obs):
+    def _forward_offline_trajectory(self, obs, encoding=None):
         B, total_dim = obs.shape
 
         # ---------------------------------------------------
@@ -542,7 +560,10 @@ class PIDController(nn.Module):
         def_target_pos = task_obs[:, 0:3]
         def_target_vel = task_obs[:, 30:33]
         def_target_rpy = task_obs[:, 60:63]
-        task_states_encoded = self.task_encoder(task_obs)        
+        if encoding is not None:
+            task_states_encoded = encoding
+        else:
+            task_states_encoded = self.task_encoder(task_obs)
         target_pos = def_target_pos + self.encode_lambda * task_states_encoded[:, 0:3]
         target_vel = def_target_vel + self.encode_lambda * task_states_encoded[:, 3:6]
         target_rpy = def_target_rpy + self.encode_lambda * task_states_encoded[:, 6:9]

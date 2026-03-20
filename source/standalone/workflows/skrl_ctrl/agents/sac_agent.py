@@ -59,12 +59,12 @@ class SACMod(SAC):
             sampled_states, sampled_actions, sampled_rewards, sampled_next_states, sampled_terminated, sampled_truncated = \
             self.memory.sample(names=self._tensors_names, batch_size=self._batch_size)[0]
 
-            with torch.no_grad():
-                processed_states = self.policy.pre_process_offline(sampled_states)
-                processed_next_states = self.policy.pre_process_offline(sampled_next_states)
+            # with torch.no_grad():
+            #     processed_states = self.policy.pre_process_offline(sampled_states)
+            #     processed_next_states = self.policy.pre_process_offline(sampled_next_states)
 
-            inputs = {"states": processed_states}
-            next_inputs = {"states": processed_next_states}
+            inputs = {"states": sampled_states}
+            next_inputs = {"states": sampled_next_states}
 
             # ---------------------- Critic target ----------------------
             with torch.no_grad():
@@ -119,7 +119,11 @@ class SACMod(SAC):
             self.critic_optimizer.step()
 
             # ---------------------- Policy loss ----------------------
-            actions, log_prob, _ = self.policy.act(inputs, role="policy")
+            # Use states that require grad so the graph to task_encoder is retained.
+            # (processed_states were computed under no_grad and can break gradient flow.)
+            policy_states = processed_states.detach().clone().requires_grad_(True)
+            policy_inputs = {"states": policy_states}
+            actions, log_prob, outputs = self.policy.act(policy_inputs, role="policy")
 
             with torch.no_grad():
                 critic_1_values, _, _ = self.critic_1.act(
@@ -133,10 +137,25 @@ class SACMod(SAC):
                 self._entropy_coefficient * log_prob
                 - torch.min(critic_1_values, critic_2_values)
             ).mean()
+            # Optional: small auxiliary so task_encoder gets gradient if main loss path doesn't.
+            # Can remove or set to 0 if policy uses explicit log_prob and TaskEncoder/grad_norm is non-zero.
+            if outputs.get("mean_encoding") is not None:
+                policy_loss = policy_loss 
 
             # optimization step (policy)
             self.policy_optimizer.zero_grad()
             policy_loss.backward()
+
+            # Task encoder gradient norm (before clip/step) for logging
+            te_grad_norm = 0.0
+            if hasattr(self.policy, "net") and hasattr(self.policy.net, "task_encoder"):
+                grads = [
+                    p.grad.flatten()
+                    for p in self.policy.net.task_encoder.parameters()
+                    if p.grad is not None
+                ]
+                if grads:
+                    te_grad_norm = torch.cat(grads).norm().item()
 
             if config.torch.is_distributed:
                 self.policy.reduce_parameters()
@@ -177,6 +196,65 @@ class SACMod(SAC):
                 self.track_data("Loss / Policy loss", policy_loss.item())
                 self.track_data("Loss / Critic loss", critic_loss.item())
 
+                # Task encoder: gradient norm and weight stats
+                if hasattr(self.policy, "net") and hasattr(self.policy.net, "task_encoder"):
+                    self.track_data("TaskEncoder / grad_norm", te_grad_norm)
+                    with torch.no_grad():
+                        te_params = list(self.policy.net.task_encoder.parameters())
+                        if te_params:
+                            all_w = torch.cat([p.flatten() for p in te_params])
+                            self.track_data("TaskEncoder / weights (norm)", all_w.norm().item())
+                            self.track_data("TaskEncoder / weights (mean)", all_w.mean().item())
+                            self.track_data("TaskEncoder / weights (std)", all_w.std().item())
+                            self.track_data("TaskEncoder / weights (min)", all_w.min().item())
+                            self.track_data("TaskEncoder / weights (max)", all_w.max().item())
+                    # Task encoder output (9 dims: pos_delta 0:3, vel_delta 3:6, rpy_delta 6:9)
+                    if gradient_step == 0:
+                        with torch.no_grad():
+                            # sampled_states: (B, T, obs_dim); raw task is 10:-1 (90 dims)
+                            task_obs = sampled_states[:, -1, 10:-1]
+                            if task_obs.shape[1] == 90:
+                                encoded = self.policy.net.task_encoder(task_obs)
+                                for i, name in enumerate(["pos_delta", "vel_delta", "rpy_delta"]):
+                                    start, end = i * 3, (i + 1) * 3
+                                    self.track_data(f"TaskEncoder / {name} (mean)", encoded[:, start:end].mean().item())
+                                    self.track_data(f"TaskEncoder / {name} (std)", encoded[:, start:end].std().item())
+                                    self.track_data(f"TaskEncoder / {name} (min)", encoded[:, start:end].min().item())
+                                    self.track_data(f"TaskEncoder / {name} (max)", encoded[:, start:end].max().item())
+
+                # Policy log_std (learned or fixed per action dim)
+                # if hasattr(self.policy, "log_std_parameter"):
+                #     log_std = self.policy.log_std_parameter
+                #     if log_std is not None:
+                #         log_std = log_std.detach()
+                        # self.track_data("Policy / log_std (mean)", log_std.mean().item())
+                        # self.track_data("Policy / log_std (std)", log_std.std().item())
+                        # self.track_data("Policy / log_std (min)", log_std.min().item())
+                        # self.track_data("Policy / log_std (max)", log_std.max().item())
+                        # for i in range(log_std.shape[0]):
+                        #     self.track_data(f"Policy / log_std_dim_{i}", log_std[i].item())
+
+                # Full observation breakdown (106 dims: pos 3, quat 4, vel 3, task 90, pos_int 3, rpy_int 3)
+                obs_position = processed_states[:, 0:3]
+                obs_quat = processed_states[:, 3:7]
+                obs_velocity = processed_states[:, 7:10]
+                obs_task_states = processed_states[:, 10:100]
+                pos_int_term = processed_states[:, 100:103]
+                rpy_int_term = processed_states[:, 103:106]
+
+                for name, tensor in [
+                    ("position", obs_position),
+                    ("quat", obs_quat),
+                    ("velocity", obs_velocity),
+                    ("task_states", obs_task_states),
+                    ("pos_int_term", pos_int_term),
+                    ("rpy_int_term", rpy_int_term),
+                ]:
+                    self.track_data(f"Obs / {name} (min)", tensor.min().item())
+                    self.track_data(f"Obs / {name} (max)", tensor.max().item())
+                    self.track_data(f"Obs / {name} (mean)", tensor.mean().item())
+                    self.track_data(f"Obs / {name} (std)", tensor.std().item())
+
                 self.track_data("Q-network / Q1 (max)", torch.max(critic_1_values).item())
                 self.track_data("Q-network / Q1 (min)", torch.min(critic_1_values).item())
                 self.track_data("Q-network / Q1 (mean)", torch.mean(critic_1_values).item())
@@ -196,3 +274,26 @@ class SACMod(SAC):
                 if self._learning_rate_scheduler:
                     self.track_data("Learning / Policy learning rate", self.policy_scheduler.get_last_lr()[0])
                     self.track_data("Learning / Critic learning rate", self.critic_scheduler.get_last_lr()[0])
+    
+    def act(self, states: torch.Tensor, timestep: int, timesteps: int) -> torch.Tensor:
+        """Process the environment's states to make a decision (actions) using the main policy
+
+        :param states: Environment's states
+        :type states: torch.Tensor
+        :param timestep: Current timestep
+        :type timestep: int
+        :param timesteps: Number of timesteps
+        :type timesteps: int
+
+        :return: Actions
+        :rtype: torch.Tensor
+        """
+        # sample random actions
+        # TODO, check for stochasticity
+        if timestep < self._random_timesteps:
+            return self.policy.random_act({"states": self._state_preprocessor(states)}, role="policy")
+
+        # sample stochastic actions
+        actions, _, outputs = self.policy.act({"states": self._state_preprocessor(states)}, role="policy")
+
+        return actions, None, outputs

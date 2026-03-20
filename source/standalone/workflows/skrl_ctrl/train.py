@@ -28,7 +28,7 @@ from omni.isaac.lab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Run the eval script with customizable parameters.")
 # Add arguments
-parser.add_argument("--env_version", type=str, default="legtrain-active-bo")
+parser.add_argument("--env_version", type=str, default="legtrain")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # Parse arguments
@@ -46,7 +46,7 @@ num_envs = 32 if not finetune else 1
 env = load_isaaclab_env(task_name = task_name, num_envs=num_envs, cli_args=cli_args)
 
 # using multitask parameterization
-multitask = True
+multitask = False
 
 video_kwargs = {
     "video_folder": os.path.join(f"runs/torch/{task_version}/", "videos", "train", "CTRLSAC"),
@@ -177,10 +177,10 @@ cfg["critic_learning_rate"] = 1e-4 if not finetune else 3e-4
 cfg["weight_decay"] = 0
 cfg["feature_learning_rate"] = 1e-4 if not finetune else 1e-5
 cfg["random_timesteps"] = 12e3 if not finetune else 0
-cfg["learning_starts"] = 0#12e3 if not finetune else 25e3
+cfg["learning_starts"] = 12e3 if not finetune else 25e3
 cfg["grad_norm_clip"] = 1.0
 cfg["learn_entropy"] = True if not finetune else False
-cfg["entropy_learning_rate"] = 1e-5
+cfg["entropy_learning_rate"] = 1e-4 if multitask else 1e-5
 cfg["initial_entropy_value"] = 1.0 if not finetune else 0.06
 cfg["experiment"]["write_interval"] = 1000
 cfg["experiment"]["checkpoint_interval"] = 10000 if not finetune else 1000
@@ -189,12 +189,10 @@ cfg['extra_feature_steps'] = 0
 cfg['extra_critic_steps'] = 2
 cfg['target_update_period'] = 1
 cfg['eval'] = False
-
-cfg["experiment"]["directory"] = f"runs/torch/{task_name}/CTRL-SAC-{multitask}/"
 cfg["experiment"]["wandb"] = True
 cfg["experiment"]["wandb_kwargs"] = {
-    "project": "Isaac-Lab-Quadcopter-CTRL-SAC",
-    "name": f"{task_name}-CTRL-SAC-{multitask}",
+    "project": "CDC",
+    "name": f"CTRL-SAC-multitask-{str(multitask)}",
     "config": {
         "task": task_name,
         "num_envs": num_envs,
@@ -203,9 +201,11 @@ cfg["experiment"]["wandb_kwargs"] = {
         "feature_dim": 512,
     }
 }
+
+cfg["experiment"]["directory"] = f"runs/torch/{task_name}/CTRL-SAC-{multitask}/"
 cfg['alpha'] = 1e-3
 
-cfg['memory'] = None if not finetune else None
+cfg['memory'] = None 
 
 agent = CTRLSACAgent(
             models=models,

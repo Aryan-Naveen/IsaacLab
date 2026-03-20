@@ -41,7 +41,7 @@ PYTORCH_INDEX_URL = ["https://download.pytorch.org/whl/cu118"]
 # Extra dependencies for RL agents
 EXTRAS_REQUIRE = {
     "sb3": ["stable-baselines3==2.1.0"],
-    "skrl": ["skrl>=1.3.0"],
+    "skrl": ["skrl==1.3.0"],
     "rl-games": ["rl-games==1.6.1", "gym"],  # rl-games still needs gym :(
     # Temporarily disable rsl-rl install to avoid torch>=2.6.0 constraint clash with torch==2.4.0
     "rsl-rl": [],

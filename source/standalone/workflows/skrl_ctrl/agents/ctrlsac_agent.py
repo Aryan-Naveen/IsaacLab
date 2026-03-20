@@ -238,25 +238,25 @@ class CTRLSACAgent(SAC):
                     self.track_data("Learning / Policy learning rate", self.policy_scheduler.get_last_lr()[0])
                     self.track_data("Learning / Critic learning rate", self.critic_scheduler.get_last_lr()[0])
                     
-    def write_tracking_data(self, timestep: int, timesteps: int) -> None:
-        super().write_tracking_data(timestep, timesteps)
+    # def write_tracking_data(self, timestep: int, timesteps: int) -> None:
+    #     super().write_tracking_data(timestep, timesteps)
         
-        for name, param in self.critic_1.named_parameters():
-            if param.requires_grad:  # Log only trainable parameters
-                self.writer.add_histogram(f"Weights/Critic_{name}", param.data.cpu().numpy(), timestep)
-                if param.grad is not None:
-                    self.writer.add_histogram(f"Gradients/Critic_{name}", param.grad.cpu().numpy(), timestep)
+    #     for name, param in self.critic_1.named_parameters():
+    #         if param.requires_grad:  # Log only trainable parameters
+    #             self.writer.add_histogram(f"Weights/Critic_{name}", param.data.cpu().numpy(), timestep)
+    #             if param.grad is not None:
+    #                 self.writer.add_histogram(f"Gradients/Critic_{name}", param.grad.cpu().numpy(), timestep)
         
-        for name, param in self.policy.named_parameters():
-            if param.requires_grad:  # Log only trainable parameters
-                self.writer.add_histogram(f"Weights/Policy_{name}", param.data.cpu().numpy(), timestep)
-                if param.grad is not None:
-                    self.writer.add_histogram(f"Gradients/Policy_{name}", param.grad.cpu().numpy(), timestep)
+    #     for name, param in self.policy.named_parameters():
+    #         if param.requires_grad:  # Log only trainable parameters
+    #             self.writer.add_histogram(f"Weights/Policy_{name}", param.data.cpu().numpy(), timestep)
+    #             if param.grad is not None:
+    #                 self.writer.add_histogram(f"Gradients/Policy_{name}", param.grad.cpu().numpy(), timestep)
                     
-        for name, param in self.phi.named_parameters():
-            if param.requires_grad:  # Log only trainable parameters
-                self.writer.add_histogram(f"Weights/Phi_{name}", param.data.cpu().numpy(), timestep)
-                if param.grad is not None:
-                    self.writer.add_histogram(f"Gradients/Phi_{name}", param.grad.cpu().numpy(), timestep)
+    #     for name, param in self.phi.named_parameters():
+    #         if param.requires_grad:  # Log only trainable parameters
+    #             self.writer.add_histogram(f"Weights/Phi_{name}", param.data.cpu().numpy(), timestep)
+    #             if param.grad is not None:
+    #                 self.writer.add_histogram(f"Gradients/Phi_{name}", param.grad.cpu().numpy(), timestep)
                     
         

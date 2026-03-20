@@ -3,7 +3,8 @@
 # Path to docker compose file in the repo
 COMPOSE_FILE := docker/docker-compose.yaml
 SERVICE := isaac-lab-base
-TRAIN_SCRIPT := source/standalone/workflows/skrl_ctrl/train_sac.py
+SAC_TRAIN_SCRIPT := source/standalone/workflows/skrl_ctrl/train_sac.py
+CTRLSAC_TRAIN_SCRIPT := source/standalone/workflows/skrl_ctrl/train.py
 DEBUG_PORT ?= 5678
 
 # Build the base image
@@ -17,10 +18,17 @@ up: build
 	docker compose -f ${COMPOSE_FILE} up -d ${SERVICE}
 
 # Start the training script (normal, non-debug)
-start:
+start_sac:
 	@echo "Starting training (non-debug) in container '${SERVICE}'..."
 	@docker compose -f ${COMPOSE_FILE} ps --services --filter "status=running" | grep -q "${SERVICE}" || (echo "Container not running. Run 'make up' first." >&2; exit 1)
-	docker compose -f ${COMPOSE_FILE} exec ${SERVICE} bash -lc "/workspace/isaaclab/isaaclab.sh -p ${TRAIN_SCRIPT} --headless --enable_cameras"
+	docker compose -f ${COMPOSE_FILE} exec ${SERVICE} bash -lc "/workspace/isaaclab/isaaclab.sh -p ${SAC_TRAIN_SCRIPT} --headless --enable_cameras"
+
+# Start the training script (normal, non-debug)
+start_ctrlsac:
+	@echo "Starting training (non-debug) in container '${SERVICE}'..."
+	@docker compose -f ${COMPOSE_FILE} ps --services --filter "status=running" | grep -q "${SERVICE}" || (echo "Container not running. Run 'make up' first." >&2; exit 1)
+	docker compose -f ${COMPOSE_FILE} exec ${SERVICE} bash -lc "/workspace/isaaclab/isaaclab.sh -p ${CTRLSAC_TRAIN_SCRIPT} --headless --enable_cameras"
+
 
 # Start training under debugpy (wraps the helper script)
 debug-run:
