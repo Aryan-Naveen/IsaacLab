@@ -31,6 +31,6 @@ if ! docker compose -f "${COMPOSE_FILE}" ps --services --filter "status=running"
 fi
 
 docker compose -f "${COMPOSE_FILE}" exec isaac-lab-base bash -lc \
-  "/workspace/isaaclab/isaaclab.sh -p -m debugpy --listen 0.0.0.0:${PORT} ${WAIT_FLAG} source/standalone/workflows/skrl_ctrl/train_sac.py --headless --enable_cameras"
+  "cd /workspace/isaaclab && /workspace/isaaclab/isaaclab.sh -p -m debugpy --listen 0.0.0.0:${PORT} ${WAIT_FLAG} source/standalone/workflows/skrl_ctrl/train_sac.py --headless --enable_cameras"
 
 echo "Debug run launched. Attach your debugger to localhost:${PORT}."

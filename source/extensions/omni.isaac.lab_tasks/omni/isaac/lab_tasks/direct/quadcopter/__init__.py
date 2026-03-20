@@ -3,9 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
-"""
-Quacopter environment.
-"""
+"""Quacopter environment."""
 
 import gymnasium as gym
 
@@ -29,95 +27,38 @@ gym.register(
 )
 
 gym.register(
-    id="Isaac-Quadcopter-Linear-Trajectory-Direct-v0",
-    entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": QuadcopterTrajectoryLinearEnvCfg
-    },
-)
-
-gym.register(
-    id="Isaac-Quadcopter-Diagonal-Trajectory-Direct-v0",
-    entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": QuadcopterTrajectoryDiagonalEnvCfg
-    },
-)
-
-gym.register(
-    id="Isaac-Quadcopter-Quadratic-Trajectory-Direct-v0",
-    entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": QuadcopterTrajectoryQuadraticEnvCfg
-    },
-)
-
-gym.register(
-    id="Isaac-Quadcopter-Multi-Trajectory-Direct-v0",
-    entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": QuadcopterTrajectoryMultiEnvCfg
-    },
-)
-
-gym.register(
     id="Isaac-Quadcopter-legtrain-Trajectory-Direct-v0",
     entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": QuadcopterTrajectoryLegendreTrainingEnvCfg
+        "env_cfg_entry_point": QuadcopterTrajectoryLegendreTrainingEnvCfg,
     },
 )
-
-gym.register(
-    id="Isaac-Quadcopter-legtrain-active-bo-Trajectory-Direct-v0",
-    entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": QuadcopterTrajectoryTrainingActiveBOTaskEnvCfg
-    },
-)
-
-gym.register(
-    id="Isaac-Quadcopter-legtrain-active-eigen-Trajectory-Direct-v0",
-    entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": QuadcopterTrajectoryTrainingActiveEigenTaskEnvCfg
-    },
-)
-
 
 gym.register(
     id="Isaac-Quadcopter-legtrain-random-Trajectory-Direct-v0",
     entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": QuadcopterTrajectoryTrainingRandomTaskEnvCfg
+        "env_cfg_entry_point": QuadcopterTrajectoryTrainingRandomTaskEnvCfg,
     },
 )
-
 
 gym.register(
     id="Isaac-Quadcopter-legeval-Trajectory-Direct-v0",
     entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": QuadcopterTrajectoryLegendreEvalEnvCfg
+        "env_cfg_entry_point": QuadcopterTrajectoryLegendreEvalEnvCfg,
     },
 )
-
 
 gym.register(
     id="Isaac-Quadcopter-legeval-predef-Trajectory-Direct-v0",
     entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": QuadcopterTrajectoryPreDefEvalEnvCfg
+        "env_cfg_entry_point": QuadcopterTrajectoryPreDefEvalEnvCfg,
     },
 )
 
@@ -126,26 +67,33 @@ gym.register(
     entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": QuadcopterTrajectoryDownStreamFinetuneEnvCfg
+        "env_cfg_entry_point": QuadcopterTrajectoryDownStreamFinetuneEnvCfg,
     },
 )
 
+gym.register(
+    id="Isaac-Quadcopter-Refine-Trajectory-Direct-v0",
+    entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": QuadcopterTrajectoryRefineEnvCfg,
+    },
+)
 
 gym.register(
     id="Isaac-Quadcopter-legood-Trajectory-Direct-v0",
     entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": QuadcopterTrajectoryLegendreOODEnvCfg
+        "env_cfg_entry_point": QuadcopterTrajectoryLegendreOODEnvCfg,
     },
 )
-
 
 gym.register(
     id="Isaac-Quadcopter-OOD-Trajectory-Direct-v0",
     entry_point="omni.isaac.lab_tasks.direct.quadcopter:QuadcopterTrajectoryEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": QuadcopterTrajectoryOODEnvCfg
+        "env_cfg_entry_point": QuadcopterTrajectoryOODEnvCfg,
     },
 )
