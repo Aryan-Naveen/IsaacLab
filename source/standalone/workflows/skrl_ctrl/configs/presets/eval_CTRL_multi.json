@@ -1,0 +1,12 @@
+{
+  "mode": "eval_one",
+  "agent_type": "CTRLSAC-multi",
+  "checkpoint_dir": "/workspace/isaaclab/runs/finetune/ctrlsac_multi_deg3/round_0000",
+  "checkpoint_name": "agent_finetuned.pt",
+  "gym_task_id": "Isaac-Quadcopter-Refine-Trajectory-Direct-v0",
+  "coeff_json": "../coeffs/custom_coeffs.json",
+  "spawn_xy_radius_max_m": 0.0,
+  "seed": 42,
+  "output_root": "/workspace/isaaclab/runs/eval",
+  "video": true
+}

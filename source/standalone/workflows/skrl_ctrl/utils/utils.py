@@ -1,4 +1,4 @@
-from typing import Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 import os
 import sys
@@ -24,11 +24,15 @@ def _print_cfg(d, indent=0) -> None:
             print("  |   " * indent + f"  |-- {key}: {value}")
 
 
-def load_isaaclab_env(task_name: str = "",
-                      num_envs: Optional[int] = None,
-                      headless: Optional[bool] = None,
-                      cli_args: Sequence[str] = [],
-                      show_cfg: bool = True):
+def load_isaaclab_env(
+    task_name: str = "",
+    num_envs: Optional[int] = None,
+    headless: Optional[bool] = None,
+    cli_args: Sequence[str] = [],
+    show_cfg: bool = True,
+    env_cfg: Any | None = None,
+    env_cfg_factory: Callable[[], Any] | None = None,
+):
     """Load an Isaac Lab environment
 
     Isaac Lab: https://isaac-sim.github.io/IsaacLab
@@ -57,6 +61,9 @@ def load_isaaclab_env(task_name: str = "",
     :type cli_args: list of str, optional
     :param show_cfg: Whether to print the configuration (default: ``True``)
     :type show_cfg: bool, optional
+    :param env_cfg: Optional pre-built env config (only after AppLauncher if you build it yourself).
+    :param env_cfg_factory: Callable returning env cfg, invoked **after** :class:`AppLauncher` and
+        ``import omni.isaac.lab_tasks`` (required for configs that import Isaac / Omniverse modules).
 
     :raises ValueError: The task name has not been defined, neither by the function parameter nor by the command line arguments
 
@@ -142,7 +149,13 @@ def load_isaaclab_env(task_name: str = "",
 
     import omni.isaac.lab_tasks  # type: ignore
     from omni.isaac.lab_tasks.utils import parse_env_cfg  # type: ignore
-    cfg = parse_env_cfg(args.task, device=args.device, num_envs=args.num_envs, use_fabric=not args.disable_fabric)
+
+    if env_cfg_factory is not None:
+        cfg = env_cfg_factory()
+    elif env_cfg is not None:
+        cfg = env_cfg
+    else:
+        cfg = parse_env_cfg(args.task, device=args.device, num_envs=args.num_envs, use_fabric=not args.disable_fabric)
 
     # print config
     if show_cfg:

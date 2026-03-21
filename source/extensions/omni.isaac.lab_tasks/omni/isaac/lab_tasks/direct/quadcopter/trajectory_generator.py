@@ -121,28 +121,42 @@ class PolynomialTrajectoryGenerator:
 
     def convert_predefined_coeffecients(self, coeffs, returnpoly=False):
         legendre_poly = Legendre(coeffs, domain=[0, self.B])
-        coeffs = legendre_poly.convert(kind=P.Polynomial).coef
-
-        coefficients = np.zeros(6)
-        coefficients[1 : coeffs.size] = coeffs[1:]
+        poly_coef = legendre_poly.convert(kind=P.Polynomial).coef
+        # Match generate_legendre_coeffecients / naive_random_sample: 7 power-basis terms for traj.
+        coefficients = np.pad(poly_coef, (0, max(0, 7 - poly_coef.size)))
+        if coefficients.size > 7:
+            coefficients = coefficients[:7].copy()
+        coefficients[0] = 0
 
         if returnpoly:
             return coefficients, legendre_poly
         return coefficients
 
-    def generate_tasks_random(self, lvl, num_environments, env_ids):
-        random_indices = torch.randint(0, min(lvl, self.coefficients.shape[0]), (num_environments,), device=self.device)
-        if self.eval:
-            random_indices = (
-                torch.arange(
-                    self.curr_experiment,
-                    self.curr_experiment + num_environments,
-                    device=self.device,
+    def generate_tasks_random(
+        self,
+        lvl,
+        num_environments,
+        env_ids,
+        forced_task_indices: torch.Tensor | None = None,
+    ):
+        n_coeff = self.coefficients.shape[0]
+        cap = max(1, min(int(lvl), int(n_coeff))) if n_coeff > 0 else 1
+        if forced_task_indices is not None:
+            random_indices = forced_task_indices.long().to(self.device).reshape(num_environments)
+            self.curr_experiment_tracker[env_ids] = random_indices
+        else:
+            random_indices = torch.randint(0, cap, (num_environments,), device=self.device)
+            if self.eval:
+                random_indices = (
+                    torch.arange(
+                        self.curr_experiment,
+                        self.curr_experiment + num_environments,
+                        device=self.device,
+                    )
+                    % n_coeff
                 )
-                % self.coefficients.shape[0]
-            )
-            self.curr_experiment = (self.curr_experiment + num_environments) % self.coefficients.shape[0]
-            self.curr_experiment_tracker[env_ids] = random_indices.to(self.device)
+                self.curr_experiment = (self.curr_experiment + num_environments) % max(n_coeff, 1)
+                self.curr_experiment_tracker[env_ids] = random_indices.to(self.device)
 
         selected_tasks = self.legendre[random_indices].float()
         selected_coeffs = self.coefficients[random_indices]
@@ -160,15 +174,22 @@ class PolynomialTrajectoryGenerator:
         selected_tasks[:, 0] = 0
         return selected_coeffs, selected_tasks
 
-    def generate_trajectory(self, rpose, num_environments, env_ids, offset_r=0.05, lvl=10):
+    def generate_trajectory(
+        self,
+        rpose,
+        num_environments,
+        env_ids,
+        offset_r=0.05,
+        lvl=10,
+        forced_task_indices: torch.Tensor | None = None,
+    ):
         pos0 = torch.rand(num_environments, 1, 3, device=self.device) * offset_r + rpose.unsqueeze(1)
         traj_ = torch.zeros(num_environments, self.N, 3, device=self.device)
         traj_[:, :, 0] = torch.linspace(0, self.H * self.vn, self.N, device=self.device)
 
-        if lvl == -3:
-            selected_coeffs, selected_tasks = self.naive_random_sample_tasks(num_environments)
-        else:
-            selected_coeffs, selected_tasks = self.generate_tasks_random(lvl, num_environments, env_ids)
+        selected_coeffs, selected_tasks = self.generate_tasks_random(
+            lvl, num_environments, env_ids, forced_task_indices=forced_task_indices
+        )
 
         x = traj_[:, :, 0]
 

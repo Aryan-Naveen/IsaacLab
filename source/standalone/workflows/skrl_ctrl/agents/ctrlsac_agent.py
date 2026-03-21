@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Union, Tuple, Dict, Any, Optional, Mapping
 import gym, gymnasium
 import copy
@@ -46,6 +48,7 @@ class CTRLSACAgent(SAC):
         
         self.alpha = cfg['alpha']
         self.eval = cfg['eval']
+        self._drone_state_dim = int(cfg.get("drone_state_dim", 13))
 
         if self.use_feature_target:
             self.phi_target = copy.deepcopy(self.phi)
@@ -60,6 +63,10 @@ class CTRLSACAgent(SAC):
         self.checkpoint_modules["frozen_phi"] = self.frozen_phi
         self.checkpoint_modules["mu"] = self.mu
         self.checkpoint_modules["theta"] = self.theta
+
+        # Stock SAC sets this in init() (trainer); offline finetune calls _update without init().
+        if not hasattr(self, "_tensors_names"):
+            self._tensors_names = ["states", "actions", "rewards", "next_states", "terminated"]
         
         # self.target_update_period = cfg['target_update_period']
         
@@ -69,10 +76,234 @@ class CTRLSACAgent(SAC):
 
         
     def decompose_state_vector(self, states):
-        drone_states = states[:, :13]
-        task_states = states[:, 13:]
-        
+        d = self._drone_state_dim
+        drone_states = states[:, :d]
+        task_states = states[:, d:]
         return drone_states, task_states
+
+    def configure_offline_finetune(
+        self,
+        *,
+        critic_lr: float | None = None,
+        actor_lr: float | None = None,
+        awr_beta: float = 1.0,
+        awr_weight_max: float = 20.0,
+        awr_num_action_samples: int = 8,
+    ) -> None:
+        """Freeze φ/μ/θ and enable offline AWR (Bellman Q + advantage-weighted BC)."""
+        self.cfg["use_offline_awr_update"] = True
+        self.cfg["use_offline_cql_awr_update"] = False
+        self.cfg["awr_beta"] = float(awr_beta)
+        self.cfg["awr_weight_max"] = float(awr_weight_max)
+        self.cfg["awr_num_action_samples"] = int(awr_num_action_samples)
+        self._learn_entropy = False
+
+        for m in (self.phi, self.mu, self.theta, self.frozen_phi):
+            if m is not None:
+                for p in m.parameters():
+                    p.requires_grad = False
+        if self.use_feature_target:
+            for m in (getattr(self, "phi_target", None), getattr(self, "frozen_phi_target", None)):
+                if m is not None:
+                    for p in m.parameters():
+                        p.requires_grad = False
+
+        if critic_lr is not None:
+            for g in self.critic_optimizer.param_groups:
+                g["lr"] = float(critic_lr)
+        if actor_lr is not None:
+            for g in self.policy_optimizer.param_groups:
+                g["lr"] = float(actor_lr)
+
+    def _offline_frozen_phi(self, states, drone_states, actions, role: str = "feature"):
+        if self.use_feature_target:
+            return self.frozen_phi_target(
+                {"states": states, "drone_states": drone_states, "actions": actions}, role=role
+            )
+        return self.frozen_phi({"states": states, "drone_states": drone_states, "actions": actions}, role=role)
+
+    def _metrics_logging_enabled(self) -> bool:
+        """True if we should emit ``track_data`` for this step (cfg and/or attribute)."""
+        if int(getattr(self, "write_interval", 0) or 0) > 0:
+            return True
+        if int(getattr(self, "_write_interval", 0) or 0) > 0:
+            return True
+        exp = self.cfg.get("experiment", {}) if isinstance(self.cfg, dict) else {}
+        return int(exp.get("write_interval", 0) or 0) > 0
+
+    def _offline_awr_update(self, timestep: int, timesteps: int) -> None:
+        """Offline few-shot step: frozen φ, Bellman Q, advantage-weighted BC (no entropy in target)."""
+        sampled_states, sampled_actions, sampled_rewards, sampled_next_states, sampled_dones = (
+            self.memory.sample(names=self._tensors_names, batch_size=self._batch_size)[0]
+        )
+
+        sampled_states = self._state_preprocessor(sampled_states, train=True)
+        sampled_next_states = self._state_preprocessor(sampled_next_states, train=True)
+
+        sampled_drone_states, sampled_task_states = self.decompose_state_vector(sampled_states)
+        sampled_next_drone_states, sampled_next_task_states = self.decompose_state_vector(sampled_next_states)
+
+        not_done = sampled_dones.logical_not()
+        if not_done.dtype != sampled_rewards.dtype:
+            not_done = not_done.to(dtype=sampled_rewards.dtype)
+
+        # ----- critic target -----
+        with torch.no_grad():
+            next_actions, _, _ = self.policy.act({"states": sampled_next_states}, role="policy")
+            z_phi_next, _, _ = self._offline_frozen_phi(
+                sampled_next_states, sampled_next_drone_states, next_actions, role="next_feature"
+            )
+            target_q1, _, _ = self.target_critic_1.act(
+                {
+                    "states": sampled_next_states,
+                    "taken_actions": next_actions,
+                    "z_phi": z_phi_next,
+                    "task_states": sampled_next_task_states,
+                },
+                role="target_critic_1",
+            )
+            target_q2, _, _ = self.target_critic_2.act(
+                {
+                    "states": sampled_next_states,
+                    "taken_actions": next_actions,
+                    "z_phi": z_phi_next,
+                    "task_states": sampled_next_task_states,
+                },
+                role="target_critic_2",
+            )
+            target_q = torch.min(target_q1, target_q2)
+            target_values = sampled_rewards + self._discount_factor * not_done * target_q
+
+        z_phi, _, _ = self._offline_frozen_phi(
+            sampled_states, sampled_drone_states, sampled_actions, role="feature"
+        )
+        q1, _, _ = self.critic_1.act(
+            {
+                "states": sampled_states,
+                "taken_actions": sampled_actions,
+                "z_phi": z_phi,
+                "task_states": sampled_task_states,
+            },
+            role="critic_1",
+        )
+        q2, _, _ = self.critic_2.act(
+            {
+                "states": sampled_states,
+                "taken_actions": sampled_actions,
+                "z_phi": z_phi,
+                "task_states": sampled_task_states,
+            },
+            role="critic_2",
+        )
+
+        critic_loss = 0.5 * (F.mse_loss(q1, target_values) + F.mse_loss(q2, target_values))
+
+        self.critic_optimizer.zero_grad()
+        critic_loss.backward()
+        if config.torch.is_distributed:
+            self.critic_1.reduce_parameters()
+            self.critic_2.reduce_parameters()
+        if self._grad_norm_clip > 0:
+            nn.utils.clip_grad_norm_(
+                itertools.chain(self.critic_1.parameters(), self.critic_2.parameters()),
+                self._grad_norm_clip,
+            )
+        self.critic_optimizer.step()
+
+        # ----- AWR actor (fresh Q on dataset actions after critic step) -----
+        beta = float(self.cfg.get("awr_beta", 1.0))
+        w_max = float(self.cfg.get("awr_weight_max", 20.0))
+        k_samples = max(1, int(self.cfg.get("awr_num_action_samples", 8)))
+
+        with torch.no_grad():
+            z_phi_d, _, _ = self._offline_frozen_phi(
+                sampled_states, sampled_drone_states, sampled_actions, role="feature"
+            )
+            q1_d, _, _ = self.critic_1.act(
+                {
+                    "states": sampled_states,
+                    "taken_actions": sampled_actions,
+                    "z_phi": z_phi_d,
+                    "task_states": sampled_task_states,
+                },
+                role="critic_1",
+            )
+            q2_d, _, _ = self.critic_2.act(
+                {
+                    "states": sampled_states,
+                    "taken_actions": sampled_actions,
+                    "z_phi": z_phi_d,
+                    "task_states": sampled_task_states,
+                },
+                role="critic_2",
+            )
+            q_dataset = torch.min(q1_d, q2_d)
+
+            v_terms = []
+            for _ in range(k_samples):
+                actions_pi, _, _ = self.policy.act({"states": sampled_states}, role="policy")
+                z_phi_pi, _, _ = self._offline_frozen_phi(
+                    sampled_states, sampled_drone_states, actions_pi, role="feature"
+                )
+                q1_pi, _, _ = self.critic_1.act(
+                    {
+                        "states": sampled_states,
+                        "taken_actions": actions_pi,
+                        "z_phi": z_phi_pi,
+                        "task_states": sampled_task_states,
+                    },
+                    role="critic_1",
+                )
+                q2_pi, _, _ = self.critic_2.act(
+                    {
+                        "states": sampled_states,
+                        "taken_actions": actions_pi,
+                        "z_phi": z_phi_pi,
+                        "task_states": sampled_task_states,
+                    },
+                    role="critic_2",
+                )
+                v_terms.append(torch.min(q1_pi, q2_pi))
+            v = torch.stack(v_terms, dim=0).mean(dim=0)
+
+            # adv = q_dataset - v
+            # # adv = (adv - adv.mean()) / (adv.std() + 1e-6)
+            adv = q_dataset - v
+            
+            # 1. Simple Batch Normalization (Try this first)
+            adv = (adv - adv.mean()) / (adv.std() + 1e-8)
+            
+            # 2. Or, use a "Max-Scaling" approach to keep weights in a specific range
+            # adv = adv / (adv.abs().mean() + 1e-8) 
+
+            weights = torch.exp(adv / beta).clamp(max=w_max)
+
+        _, log_prob, _ = self.policy.act(
+            {"states": sampled_states, "taken_actions": sampled_actions},
+            role="policy",
+        )
+        policy_loss = -(weights * log_prob).mean()
+
+        self.policy_optimizer.zero_grad()
+        policy_loss.backward()
+        if config.torch.is_distributed:
+            self.policy.reduce_parameters()
+        if self._grad_norm_clip > 0:
+            nn.utils.clip_grad_norm_(self.policy.parameters(), self._grad_norm_clip)
+        self.policy_optimizer.step()
+
+        self.target_critic_1.update_parameters(self.critic_1, polyak=self._polyak)
+        self.target_critic_2.update_parameters(self.critic_2, polyak=self._polyak)
+
+        if self._learning_rate_scheduler:
+            self.policy_scheduler.step()
+            self.critic_scheduler.step()
+
+        if self._metrics_logging_enabled():
+            self.track_data("Loss / Policy loss", policy_loss.item())
+            self.track_data("Loss / Critic loss", critic_loss.item())
+            self.track_data("Q-network / Q1 (mean)", q_dataset.mean().item())
+            self.track_data("Advantage / mean", adv.mean().item())
 
     def _update(self, timestep: int, timesteps: int) -> None:
         """Algorithm's main update step
@@ -82,6 +313,11 @@ class CTRLSACAgent(SAC):
         :param timesteps: Number of timesteps
         :type timesteps: int
         """
+        if self.cfg.get("use_offline_awr_update"):
+            for sub in range(self._gradient_steps):
+                self._offline_awr_update(timestep + sub, timesteps)
+            return
+
         # sample a batch from memory
         sampled_states, sampled_actions, sampled_rewards, sampled_next_states, sampled_dones = \
             self.memory.sample(names=self._tensors_names, batch_size=self._batch_size)[0]
@@ -212,7 +448,7 @@ class CTRLSACAgent(SAC):
                 self.critic_scheduler.step()
 
             # record data
-            if self.write_interval > 0:
+            if self._metrics_logging_enabled():
                 self.track_data("Loss / Policy loss", policy_loss.item())
                 self.track_data("Loss / Critic loss", critic_loss.item())
                 self.track_data("Loss / Feature loss", feature_loss.item())
@@ -237,26 +473,3 @@ class CTRLSACAgent(SAC):
                 if self._learning_rate_scheduler:
                     self.track_data("Learning / Policy learning rate", self.policy_scheduler.get_last_lr()[0])
                     self.track_data("Learning / Critic learning rate", self.critic_scheduler.get_last_lr()[0])
-                    
-    # def write_tracking_data(self, timestep: int, timesteps: int) -> None:
-    #     super().write_tracking_data(timestep, timesteps)
-        
-    #     for name, param in self.critic_1.named_parameters():
-    #         if param.requires_grad:  # Log only trainable parameters
-    #             self.writer.add_histogram(f"Weights/Critic_{name}", param.data.cpu().numpy(), timestep)
-    #             if param.grad is not None:
-    #                 self.writer.add_histogram(f"Gradients/Critic_{name}", param.grad.cpu().numpy(), timestep)
-        
-    #     for name, param in self.policy.named_parameters():
-    #         if param.requires_grad:  # Log only trainable parameters
-    #             self.writer.add_histogram(f"Weights/Policy_{name}", param.data.cpu().numpy(), timestep)
-    #             if param.grad is not None:
-    #                 self.writer.add_histogram(f"Gradients/Policy_{name}", param.grad.cpu().numpy(), timestep)
-                    
-    #     for name, param in self.phi.named_parameters():
-    #         if param.requires_grad:  # Log only trainable parameters
-    #             self.writer.add_histogram(f"Weights/Phi_{name}", param.data.cpu().numpy(), timestep)
-    #             if param.grad is not None:
-    #                 self.writer.add_histogram(f"Gradients/Phi_{name}", param.grad.cpu().numpy(), timestep)
-                    
-        

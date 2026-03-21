@@ -4,7 +4,6 @@
   "feature_dim": 512,
   "feature_hidden_dim": 1024,
   "cdim": 512,
-  "task_state_dim": 67,
   "drone_state_dim": 13,
   "batch_size": 256,
   "wandb_project": "CDC"

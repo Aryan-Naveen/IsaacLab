@@ -89,6 +89,20 @@ class QuadcopterTrajectoryLinearEnvCfg(DirectRLEnvCfg):
     profile = [10]
     total_iterations = 3e5
     buffer_history = 100
+    # When True and eval_mode() is used: crash/timeout does not reset; wrenches zeroed (e.g. eval video).
+    freeze_on_done_in_eval = False
+    # When > 0 and eval_mode(): place robot on XY disk around trajectory start (see trajectory_env); uses offset_r=0 on generator.
+    initial_pose_xy_radius_max_m: float = 0.0
+    # Allow initial_pose_xy when not eval (e.g. offline data collection without eval_mode); default off for training safety.
+    initial_pose_xy_when_not_eval: bool = False
+
+    # Termination (``died``): altitude + attitude + spin (see ``_get_dones`` in trajectory_env).
+    crash_z_min_m: float = 0.1
+    crash_z_max_m: float = 2.0
+    # Minimum dot(body +Z, world +Z). Below this => crashed (large roll/pitch / inverted).
+    crash_body_up_z_dot_min: float = 0.0
+    # Body-frame angular velocity norm (rad/s); above => crashed (unrecoverable tumble).
+    crash_max_ang_vel_rad_s: float = 28.0
 
     ui_window_class_type = QuadcopterEnvWindow
 
@@ -138,6 +152,8 @@ class QuadcopterTrajectoryLinearEnvCfg(DirectRLEnvCfg):
         self.viewer.eye = [0.0, 4.0, 7.5]
         self.viewer.lookat = [1.0, 0.0, 0.0]
         self.viewer.up = [0.0, 0.0, 0.0]
+        # Higher than default (1280, 720) for clearer RecordVideo / rgb_array captures.
+        self.viewer.resolution = (1920, 1080)
 
 
 @configclass
@@ -159,6 +175,7 @@ class QuadcopterTrajectoryTrainingRandomTaskEnvCfg(QuadcopterTrajectoryLinearEnv
 @configclass
 class QuadcopterTrajectoryLegendreEvalEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
     mode = 7
+    freeze_on_done_in_eval = True
 
 
 @configclass
@@ -166,6 +183,7 @@ class QuadcopterTrajectoryPreDefEvalEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
     mode = 7
     np.random.seed(42)
     predefined_task_coeff = [[0, 0, 0, 0, 0, 1, 0]]
+    freeze_on_done_in_eval = True
 
 
 @configclass
@@ -198,3 +216,4 @@ class QuadcopterTrajectoryOODEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
         self.viewer.eye = [-0.0, 4.0, 7.5]
         self.viewer.lookat = [1.0, 4.0, 0.0]
         self.viewer.up = [-1.0, 0.0, 0.0]
+        self.viewer.resolution = (1920, 1080)

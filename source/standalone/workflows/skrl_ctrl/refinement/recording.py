@@ -18,28 +18,26 @@ def record_transition(
 ) -> None:
     """Append one vectorized transition to ``memory`` using field names expected by ``agent``.
 
-    Aligns with skrl SAC-style memories: ``states``, ``actions``, ``rewards``, ``next_states``, and
-    a done flag. If your skrl build uses ``dones`` only, pass ``terminated | truncated`` as a single
-    done tensor via ``terminated=...`` and leave ``truncated`` as ``None``.
-
-    The exact ``memory.add_samples`` / internal API may differ by skrl version; adjust this function
-    after inspecting ``SequentialTrainer`` and ``agent._tensors_names`` in your install.
+    Matches skrl torch SAC memory layout (see Toni-SM/skrl SAC.init, e.g. commit 3bd530cf):
+    tensors ``states``, ``actions``, ``rewards``, ``next_states``, ``terminated`` (bool).
+    ``agent._tensors_names`` is set in ``SAC.init()`` or by offline helpers such as
+    ``fill_random_memory_from_transition_dict``.
     """
     names = getattr(agent, "_tensors_names", None)
     if truncated is not None:
-        dones = (terminated.bool() | truncated.bool()).to(dtype=torch.float32)
+        term_bool = terminated.bool() | truncated.bool()
     else:
-        dones = terminated.to(dtype=torch.float32)
+        term_bool = terminated.bool() if terminated.dtype == torch.bool else terminated != 0
 
     if names is None:
-        names = ("states", "actions", "rewards", "next_states", "dones")
+        names = ("states", "actions", "rewards", "next_states", "terminated")
 
     mapping = {
         "states": states,
         "actions": actions,
         "rewards": rewards,
         "next_states": next_states,
-        "dones": dones,
+        "terminated": term_bool.to(dtype=torch.bool),
     }
     if hasattr(memory, "add_samples"):
         try:

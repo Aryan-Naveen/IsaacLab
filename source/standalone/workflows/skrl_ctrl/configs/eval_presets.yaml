@@ -1,0 +1,33 @@
+# Optional YAML presets (requires: pip install pyyaml).
+# JSON presets under configs/presets/ work without extra dependencies.
+#
+# Example:
+#   mode: eval_one
+#   agent_type: CTRLSAC-multi
+#   checkpoint_dir: /workspace/isaaclab/runs/torch/YOUR_RUN/checkpoints
+#   checkpoint_name: agent_300000.pt
+#   gym_task_id: Isaac-Quadcopter-Refine-Trajectory-Direct-v0
+#   coeff_json: ../coeffs/finetune_deg3.json
+#   spawn_xy_radius_max_m: 0.5
+#   seed: 42
+#   output_root: /workspace/isaaclab/runs/eval
+#   video: true
+#
+# Finetune (offline AWR; ``python cli.py finetune --preset your.yaml``)
+# ---
+# mode: finetune
+# offline_algorithm: awr
+# offline_critic_learning_rate: 3.0e-5
+# offline_actor_learning_rate: 3.0e-5
+# awr_beta: 1.0
+# awr_weight_max: 20.0
+# awr_num_action_samples: 8
+# agent_type: CTRLSAC-multi
+# checkpoint_dir: /workspace/isaaclab/runs/torch/YOUR_RUN/ckpts/checkpoints
+# checkpoint_name: best_agent.pt
+# gym_task_id: Isaac-Quadcopter-Refine-Trajectory-Direct-v0
+# coeff_json: ../coeffs/finetune_deg3.json
+# B: 64
+# num_rounds: 20
+# offline_steps_per_round: 2000
+# wandb: false

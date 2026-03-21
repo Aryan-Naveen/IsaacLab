@@ -9,20 +9,57 @@ from typing import Any
 
 import gymnasium as gym
 import torch
-from skrl.agents.torch.sac import SAC, SAC_DEFAULT_CONFIG
+from skrl.agents.torch.sac import SAC_DEFAULT_CONFIG
 from skrl.envs.wrappers.torch import wrap_env
 from skrl.memories.torch import RandomMemory
 
 from agents.ctrlsac_agent import CTRLSACAgent
+from agents.sac_offline_awr_agent import OfflineAWRSAC
 from networks.actor import StochasticActor
 from networks.critic import Critic, SACCritic
 from networks.feature import Mu, Phi, Theta
 from utils.utils import load_isaaclab_env
 
+
+def observation_vector_dim(observation_space: gym.Space) -> int:
+    """Length of one environment's observation vector (handles ``(D,)`` and batched ``(N, D)`` boxes)."""
+    shape = getattr(observation_space, "shape", None)
+    if not shape:
+        raise ValueError(f"Cannot infer observation size from space: {observation_space!r}")
+    if len(shape) == 1:
+        return int(shape[0])
+    if len(shape) == 2:
+        return int(shape[-1])
+    raise ValueError(f"Unsupported observation_space.shape {shape}")
+
+
+def resolve_task_state_dim(
+    observation_space: gym.Space,
+    drone_state_dim: int,
+    *,
+    override: int | None = None,
+) -> int:
+    """CTRL critic task head input size: full observation minus leading drone block (unless overridden)."""
+    if override is not None:
+        return int(override)
+    obs_d = observation_vector_dim(observation_space)
+    d_drone = int(drone_state_dim)
+    task_d = obs_d - d_drone
+    if task_d <= 0:
+        raise ValueError(
+            f"Derived task_state_dim = obs_dim - drone_state_dim = {obs_d} - {d_drone} is not positive."
+        )
+    return task_d
+
+
 # Optional: programmatic refinement cfg (requires Isaac app already configured)
 def make_refine_env_cfg(
     predefined_task_coeff: list[list[float]],
     num_envs: int | None = None,
+    *,
+    initial_pose_xy_radius_max_m: float | None = None,
+    initial_pose_xy_when_not_eval: bool | None = None,
+    freeze_on_done_in_eval: bool | None = None,
 ):
     """Return a copy of :class:`QuadcopterTrajectoryRefineEnvCfg` with custom coefficients.
 
@@ -34,7 +71,146 @@ def make_refine_env_cfg(
     cfg.predefined_task_coeff = predefined_task_coeff
     if num_envs is not None:
         cfg.scene.num_envs = num_envs
+    if initial_pose_xy_radius_max_m is not None:
+        cfg.initial_pose_xy_radius_max_m = float(initial_pose_xy_radius_max_m)
+    if initial_pose_xy_when_not_eval is not None:
+        cfg.initial_pose_xy_when_not_eval = bool(initial_pose_xy_when_not_eval)
+    if freeze_on_done_in_eval is not None:
+        cfg.freeze_on_done_in_eval = bool(freeze_on_done_in_eval)
     return cfg
+
+
+def eval_agent_memory_config() -> dict[str, Any]:
+    """SAC/CTRLSAC kwargs matching historical ``cli.py`` eval rollouts (no training)."""
+    cfg = copy.deepcopy(SAC_DEFAULT_CONFIG)
+    cfg["gradient_steps"] = 1
+    cfg["batch_size"] = 256
+    cfg["discount_factor"] = 0.99
+    cfg["polyak"] = 0.005
+    cfg["actor_learning_rate"] = 1e-4
+    cfg["critic_learning_rate"] = 1e-4
+    cfg["weight_decay"] = 0
+    cfg["feature_learning_rate"] = 5e-5
+    cfg["grad_norm_clip"] = 1.0
+    cfg["learn_entropy"] = True
+    cfg["entropy_learning_rate"] = 1e-4
+    cfg["initial_entropy_value"] = 1.0
+    cfg["random_timesteps"] = 0
+    cfg["learning_starts"] = 1e6
+    cfg["experiment"]["write_interval"] = 0
+    cfg["experiment"]["checkpoint_interval"] = 0
+    cfg["use_feature_target"] = False
+    cfg["extra_feature_steps"] = 1
+    cfg["target_update_period"] = 1
+    cfg["eval"] = True
+    cfg["alpha"] = None
+    return cfg
+
+
+def build_loaded_eval_agent(
+    env: Any,
+    device: torch.device,
+    *,
+    agent_type: str,
+    checkpoint_path: str | Path,
+    memory_size: int = 1024,
+    actor_hidden_dim: int = 256,
+    actor_hidden_depth: int = 3,
+    feature_dim: int = 512,
+    feature_hidden_dim: int = 1024,
+    cdim: int = 512,
+    task_state_dim: int | None = None,
+    drone_state_dim: int = 13,
+) -> tuple[Any, RandomMemory]:
+    """Build SAC or CTRLSAC eval agent and load weights (matches ``cli.py`` eval stack)."""
+    multitask = agent_type == "CTRLSAC-multi"
+    resolved_type = "CTRLSAC" if multitask else agent_type
+    task_state_dim = resolve_task_state_dim(
+        env.observation_space, drone_state_dim, override=task_state_dim
+    )
+
+    agentclasses = {"CTRLSAC": CTRLSACAgent, "SAC": OfflineAWRSAC}
+    if resolved_type not in agentclasses:
+        raise ValueError(f"Unknown agent_type {agent_type!r} (use SAC, CTRLSAC, CTRLSAC-multi)")
+
+    models: dict = {"SAC": {}, "CTRLSAC": {}}
+    models["SAC"]["policy"] = StochasticActor(
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        hidden_dim=actor_hidden_dim,
+        hidden_depth=actor_hidden_depth,
+        log_std_bounds=[-5.0, 2.0],
+        device=device,
+    )
+    for n in ("critic_1", "critic_2", "target_critic_1", "target_critic_2"):
+        models["SAC"][n] = SACCritic(env.observation_space, env.action_space, feature_dim=feature_dim, device=device)
+
+    models["CTRLSAC"]["policy"] = StochasticActor(
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        hidden_dim=actor_hidden_dim,
+        hidden_depth=actor_hidden_depth,
+        log_std_bounds=[-5.0, 2.0],
+        device=device,
+    )
+    for n in ("critic_1", "critic_2", "target_critic_1", "target_critic_2"):
+        models["CTRLSAC"][n] = Critic(
+            observation_space=env.observation_space,
+            action_space=env.action_space,
+            feature_dim=feature_dim,
+            task_state_dim=task_state_dim,
+            cdim=cdim,
+            multitask=multitask,
+            device=device,
+        )
+    models["CTRLSAC"]["phi"] = Phi(
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        feature_dim=feature_dim,
+        hidden_dim=feature_hidden_dim,
+        drone_state_dim=drone_state_dim,
+        multitask=multitask,
+        device=device,
+    )
+    models["CTRLSAC"]["frozen_phi"] = Phi(
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        feature_dim=feature_dim,
+        hidden_dim=feature_hidden_dim,
+        drone_state_dim=drone_state_dim,
+        multitask=multitask,
+        device=device,
+    )
+    models["CTRLSAC"]["theta"] = Theta(
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        feature_dim=feature_dim,
+        device=device,
+    )
+    models["CTRLSAC"]["mu"] = Mu(
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        feature_dim=feature_dim,
+        hidden_dim=feature_hidden_dim,
+        drone_state_dim=drone_state_dim,
+        multitask=multitask,
+        device=device,
+    )
+
+    cfg = eval_agent_memory_config()
+    cfg["drone_state_dim"] = int(drone_state_dim)
+    memory = RandomMemory(memory_size=int(memory_size), num_envs=env.num_envs, device=device)
+    AgentClass = agentclasses[resolved_type]
+    agent = AgentClass(
+        models=models[resolved_type],
+        memory=memory,
+        cfg=cfg,
+        observation_space=env.observation_space,
+        action_space=env.action_space,
+        device=device,
+    )
+    agent.load(str(checkpoint_path))
+    return agent, memory
 
 
 def load_experiment_json(path: str | Path | None) -> dict[str, Any]:
@@ -80,9 +256,12 @@ def build_ctrlsac_models(
     feature_dim: int = 512,
     feature_hidden_dim: int = 1024,
     cdim: int = 512,
-    task_state_dim: int = 67,
+    task_state_dim: int | None = None,
     drone_state_dim: int = 13,
 ) -> dict[str, Any]:
+    task_state_dim = resolve_task_state_dim(
+        env.observation_space, drone_state_dim, override=task_state_dim
+    )
     models: dict[str, Any] = {}
     models["policy"] = StochasticActor(
         observation_space=env.observation_space,
@@ -150,6 +329,9 @@ def build_ctrlsac_agent(
     exp: dict[str, Any] | None = None,
 ) -> CTRLSACAgent:
     exp = exp or {}
+    drone_sd = int(exp.get("drone_state_dim", 13))
+    task_override = exp.get("task_state_dim")
+    task_override_i = int(task_override) if task_override is not None else None
     models = build_ctrlsac_models(
         env,
         device,
@@ -159,8 +341,8 @@ def build_ctrlsac_agent(
         feature_dim=int(exp.get("feature_dim", 512)),
         feature_hidden_dim=int(exp.get("feature_hidden_dim", 1024)),
         cdim=int(exp.get("cdim", 512)),
-        task_state_dim=int(exp.get("task_state_dim", 67)),
-        drone_state_dim=int(exp.get("drone_state_dim", 13)),
+        task_state_dim=task_override_i,
+        drone_state_dim=drone_sd,
     )
     cfg = copy.deepcopy(SAC_DEFAULT_CONFIG)
     cfg["gradient_steps"] = int(exp.get("gradient_steps", 1))
@@ -196,6 +378,7 @@ def build_ctrlsac_agent(
     cfg["experiment"]["directory"] = exp.get("experiment_directory", f"runs/torch/{task_name}/CTRL-SAC-{multitask}/")
     cfg["alpha"] = float(exp.get("alpha", 1e-3))
     cfg["memory"] = None
+    cfg["drone_state_dim"] = drone_sd
 
     agent = CTRLSACAgent(
         models=models,
@@ -241,7 +424,7 @@ def build_sac_agent(
     finetune: bool = False,
     task_name: str = "",
     exp: dict[str, Any] | None = None,
-) -> SAC:
+) -> OfflineAWRSAC:
     exp = exp or {}
     models = build_sac_models(
         env,
@@ -275,7 +458,7 @@ def build_sac_agent(
             "config": {"task": task_name, "num_envs": getattr(env, "num_envs", None)},
         },
     )
-    return SAC(
+    return OfflineAWRSAC(
         models=models,
         memory=memory,
         cfg=cfg,
