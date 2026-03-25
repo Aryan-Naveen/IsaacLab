@@ -1,4 +1,4 @@
-"""Preset-driven eval-one, eval-batch, and few-shot finetune (used by ``cli.py``)."""
+"""Preset-driven eval-one, eval-batch, offline finetune, and online finetune (used by ``cli.py``)."""
 
 from __future__ import annotations
 
@@ -11,13 +11,21 @@ from typing import Any
 
 import torch
 from skrl.envs.wrappers.torch import wrap_env
+from skrl.memories.torch import RandomMemory
+from skrl.trainers.torch import SequentialTrainer
 from skrl.utils import set_seed
 
 from evaluation.bundle import save_bundle
 from evaluation.memory_export.skrl_buffer import fill_random_memory_from_transition_dict
 from evaluation.rendering.topdown import apply_follower_viewport, apply_topdown_viewport, wrap_record_video
 from evaluation.rollout import find_trajectory_env, run_b_rollouts
-from factory import build_loaded_eval_agent, make_refine_env_cfg
+from factory import (
+    build_ctrlsac_agent,
+    build_loaded_eval_agent,
+    build_sac_agent,
+    load_experiment_json,
+    make_refine_env_cfg,
+)
 from presets import load_coeff_json, pool_indices
 from refinement.offline import offline_train_steps
 from utils.utils import load_isaaclab_env
@@ -132,7 +140,9 @@ def run_eval_one_from_preset(
         checkpoint_path=ckpt_path,
         memory_size=1024,
     )
-    find_trajectory_env(env).eval_mode()
+    traj_env = find_trajectory_env(env)
+    traj_env.eval_mode()
+    max_episode_length = int(traj_env.max_episode_length)
     bundle = run_b_rollouts(
         env,
         agent,
@@ -149,8 +159,10 @@ def run_eval_one_from_preset(
     if video and hasattr(raw_env, "close_video_recorder"):
         raw_env.close_video_recorder()
 
-    base = find_trajectory_env(env)
+    base = traj_env
     results_payload = getattr(base, "results", {})
+    r0 = bundle.rollouts[0]
+    run_abs = str(run_dir.resolve())
     metrics = {
         "mean_total_reward": bundle.metrics.mean_total_reward,
         "std_total_reward": bundle.metrics.std_total_reward,
@@ -160,11 +172,27 @@ def run_eval_one_from_preset(
         "spawn_xy_radius_max_m": spawn_r,
         "checkpoint": str(ckpt_path),
         "coeff_json": str(coeff_path.resolve()),
+        # Explicit Legendre / basis coefficients (same layout as predefined_task_coeff; one row for eval_one).
+        "trajectory_coefficients": coeff_rows,
+        "coefficient_row": coeff_rows[0],
+        "artifact_dir": run_abs,
+        "max_episode_length": max_episode_length,
+        "episode_length_steps": r0.episode_length,
+        "episode_total_reward": r0.total_reward,
+        "crashed": r0.crashed,
     }
     with open(run_dir / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2)
     torch.save(results_payload, run_dir / "results.pth")
-    print(f"[eval-one] metrics -> {run_dir / 'metrics.json'} video -> {video_dir}")
+    print(
+        f"[eval-one] rollout: {r0.episode_length} steps (env max_episode_length={max_episode_length}), "
+        f"reward={r0.total_reward:.4f}, crashed={r0.crashed}",
+        flush=True,
+    )
+    print(f"[eval-one] ARTIFACT_DIR={run_abs}", flush=True)
+    print(f"[eval-one] metrics -> {run_dir / 'metrics.json'}", flush=True)
+    if video:
+        print(f"[eval-one] video_dir -> {video_dir}", flush=True)
 
 
 def run_eval_batch_from_preset(
@@ -185,7 +213,8 @@ def run_eval_batch_from_preset(
     out_path = Path(out_raw).expanduser()
     if not out_path.is_absolute() and preset_file is not None:
         out_path = (preset_file.parent / out_path).resolve()
-    coeff_pool_raw = p.get("coeff_pool_json") or p.get("coeff_json")
+    # CLI --coeff_json merges as coeff_json; preset often sets coeff_pool_json — override must win.
+    coeff_pool_raw = p.get("coeff_json") or p.get("coeff_pool_json")
     if not coeff_pool_raw:
         raise ValueError("eval_batch preset requires coeff_pool_json (or coeff_json as a list of rows)")
     coeff_pool_path = _resolve_against_preset(str(coeff_pool_raw), preset_file)
@@ -202,7 +231,15 @@ def run_eval_batch_from_preset(
     eye_z = float(p.get("video_eye_z", 10.0))
 
     set_seed(seed)
-    idx_np = pool_indices(B, pool_size, seed)
+    sequential_pool = bool(p.get("sequential_pool_indices", False))
+    if sequential_pool:
+        if B > pool_size:
+            raise ValueError(
+                f"sequential_pool_indices requires B <= len(coeff pool); got B={B}, pool_size={pool_size}"
+            )
+        idx_np = None
+    else:
+        idx_np = pool_indices(B, pool_size, seed)
 
     def _refine_cfg():
         return make_refine_env_cfg(
@@ -225,7 +262,12 @@ def run_eval_batch_from_preset(
         env_cfg_factory=_refine_cfg if "Refine" in task else None,
     )
     te = find_trajectory_env(raw_env)
-    te.set_per_env_pool_task_indices(torch.as_tensor(idx_np, device=te.device, dtype=torch.long))
+    if sequential_pool:
+        pool_idx_t = torch.arange(B, device=te.device, dtype=torch.long)
+    else:
+        assert idx_np is not None
+        pool_idx_t = torch.as_tensor(idx_np, device=te.device, dtype=torch.long)
+    te.set_per_env_pool_task_indices(pool_idx_t)
 
     video_path = None
     if topdown:
@@ -277,6 +319,7 @@ def run_eval_batch_from_preset(
         "B": B,
         "seed": seed,
         "pool_size": pool_size,
+        "sequential_pool_indices": sequential_pool,
         "checkpoint": str(ckpt_path),
         "bundle": str(out_path.resolve()),
     }
@@ -485,5 +528,183 @@ def run_finetune_from_preset(
     if wandb_run is not None:
         try:
             wandb_run.finish()
+        except Exception:
+            pass
+
+
+_FINETUNE_ONLINE_SKIP_KEYS = frozenset(
+    {
+        "mode",
+        "agent_type",
+        "checkpoint_dir",
+        "checkpoint_name",
+        "gym_task_id",
+        "coeff_json",
+        "trajectory_json",
+        "B",
+        "timesteps",
+        "spawn_xy_radius_max_m",
+        "memory_size",
+        "output_root",
+        "seed",
+        "hq_viewport_render",
+        "video",
+        "video_follow_height",
+        "video_interval",
+        "video_length",
+        "memory_load_path",
+    }
+)
+
+
+def run_finetune_online_from_preset(
+    p: dict[str, Any],
+    *,
+    preset_file: Path | None = None,
+    argv_remainder: list[str] | None = None,
+) -> None:
+    """Load checkpoint and run on-policy ``SequentialTrainer`` on a Refine (or other) task."""
+    _ = argv_remainder
+    mode = str(p.get("mode", "finetune-online"))
+    if mode != "finetune-online":
+        raise ValueError(f"finetune-online driver expects mode 'finetune-online', got {mode!r}")
+
+    agent_type = str(p["agent_type"])
+    folder = str(Path(p["checkpoint_dir"]).expanduser())
+    ckpt = str(p["checkpoint_name"])
+    task = str(p.get("gym_task_id", "Isaac-Quadcopter-Refine-Trajectory-Direct-v0"))
+    B = int(p["B"])
+    seed = int(p.get("seed", 42))
+    timesteps = int(p.get("timesteps", 50_000))
+    spawn_r = float(p.get("spawn_xy_radius_max_m", 0.0))
+    memory_size = int(p.get("memory_size", 100_000))
+    hq = bool(p.get("hq_viewport_render", False))
+    video = bool(p.get("video", True))
+    follow_h = float(p.get("video_follow_height", 2.0))
+    video_interval = int(p.get("video_interval", 1000))
+    video_length = int(p.get("video_length", 400))
+
+    coeff_raw = p.get("coeff_json") or p.get("trajectory_json")
+    if not coeff_raw:
+        raise ValueError("finetune-online preset requires coeff_json or trajectory_json")
+    coeff_path = _resolve_against_preset(str(coeff_raw), preset_file)
+    coeff_rows = load_coeff_json(coeff_path)
+
+    out_root_raw = p.get("output_root", "runs/finetune-online")
+    output_root = Path(out_root_raw).expanduser()
+    if not output_root.is_absolute() and preset_file is not None:
+        output_root = (preset_file.parent / output_root).resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    skrl_dir = Path(__file__).resolve().parent
+    exp = load_experiment_json(skrl_dir / "configs" / "default_experiment.json")
+    for k, v in p.items():
+        if k in _FINETUNE_ONLINE_SKIP_KEYS:
+            continue
+        exp[k] = v
+    exp["experiment_directory"] = str(output_root)
+
+    set_seed(seed)
+    ckpt_path = Path(folder).expanduser() / ckpt
+    if not ckpt_path.is_file():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+
+    memory_load_path: str | None = None
+    mlp = p.get("memory_load_path") or p.get("memory_path")
+    if mlp is not None and str(mlp).strip():
+        memory_load_path = str(_resolve_against_preset(str(mlp).strip(), preset_file))
+        if not Path(memory_load_path).is_file():
+            raise FileNotFoundError(f"memory_load_path not found: {memory_load_path}")
+        print(f"[finetune-online] replay buffer: {memory_load_path}")
+
+    def _refine_cfg():
+        return make_refine_env_cfg(
+            coeff_rows,
+            num_envs=B,
+            initial_pose_xy_radius_max_m=spawn_r,
+        )
+
+    cli_args: list[str] = []
+    if hq:
+        cli_args.extend(["--experience", "isaaclab.python.headless.rendering.hq.kit"])
+    if video:
+        cli_args.extend(["--video", "--enable_cameras"])
+
+    print(
+        f"[finetune-online] agent={agent_type} task={task} B={B} timesteps={timesteps} "
+        f"-> {output_root.resolve()}"
+    )
+
+    raw_env = load_isaaclab_env(
+        task_name=task,
+        num_envs=B,
+        cli_args=cli_args,
+        show_cfg=False,
+        env_cfg_factory=_refine_cfg if "Refine" in task else None,
+    )
+    if video:
+        apply_follower_viewport(
+            raw_env,
+            env_index=0,
+            eye_offset=(0.0, 0.0, follow_h),
+            lookat_offset=(0.0, 0.0, 0.0),
+        )
+        video_dir = output_root / "videos" / "finetune-online"
+        video_dir.mkdir(parents=True, exist_ok=True)
+        raw_env = wrap_record_video(
+            raw_env,
+            video_folder=str(video_dir),
+            video_length=video_length,
+            step_trigger=lambda step, _every=video_interval: step % _every == 0,
+        )
+        print(
+            f"[finetune-online] follower camera (eval-one style), videos every {video_interval} steps "
+            f"-> {video_dir}"
+        )
+    env = wrap_env(raw_env)
+    device = env.device
+    memory = RandomMemory(memory_size=memory_size, num_envs=env.num_envs, device=device)
+
+    if agent_type == "SAC":
+        agent = build_sac_agent(
+            env,
+            memory,
+            device,
+            finetune=True,
+            task_name=task,
+            exp=exp,
+        )
+        agent.load(str(ckpt_path))
+        # apply_cfg_learning_rates_to_optimizers(agent)
+    elif agent_type in ("CTRLSAC", "CTRLSAC-multi"):
+        multitask = agent_type == "CTRLSAC-multi"
+        agent = build_ctrlsac_agent(
+            env,
+            memory,
+            device,
+            multitask=multitask,
+            finetune=True,
+            task_name=task,
+            ckpt_path=str(ckpt_path),
+            memory_path=memory_load_path,
+            exp=exp,
+        )
+    else:
+        raise ValueError(f"Unsupported agent_type for finetune-online: {agent_type!r}")
+
+    cfg_trainer = {"timesteps": timesteps, "headless": True, "environment_info": "log"}
+    trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
+    exp_dir = agent.cfg["experiment"]["directory"]
+    memory.save(exp_dir, format="pt")
+    try:
+        trainer.train()
+    finally:
+        if video and hasattr(raw_env, "close_video_recorder"):
+            try:
+                raw_env.close_video_recorder()
+            except Exception:
+                pass
+        try:
+            env.close()
         except Exception:
             pass

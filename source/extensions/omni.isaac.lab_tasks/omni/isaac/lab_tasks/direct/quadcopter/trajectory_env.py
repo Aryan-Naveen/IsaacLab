@@ -22,7 +22,7 @@ from omni.isaac.lab.utils.math import matrix_from_quat, subtract_frame_transform
 from omni.isaac.lab.markers import CUBOID_MARKER_CFG  # isort: skip
 
 from .configs import QuadcopterTrajectoryLinearEnvCfg
-from .trajectory_generator import PolynomialTrajectoryGenerator
+from .trajectory_generator import PolynomialTrajectoryGenerator, TRAJ_POLY_NUM_COEFFS
 
 
 class QuadcopterTrajectoryEnv(DirectRLEnv):
@@ -44,7 +44,7 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         )
         self.lvl = self.cfg.profile[0]
         self._desired_trajectory_w = torch.zeros(self.num_envs, self._generator.N, 3, device=self.device)
-        self._active_trajectory_command = torch.zeros(self.num_envs, 7, device=self.device)
+        self._active_trajectory_command = torch.zeros(self.num_envs, TRAJ_POLY_NUM_COEFFS, device=self.device)
         self._desired_trajectory_vel_w = torch.zeros(self.num_envs, self._generator.N, 3, device=self.device)
 
         self.episode_max_len = int(self.cfg.episode_length_s / (self.step_dt))
@@ -251,7 +251,7 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
         died_tilt = body_up_world_z < self.cfg.crash_body_up_z_dot_min
         ang_vel_norm = torch.linalg.norm(self._robot.data.root_ang_vel_b, dim=-1)
         died_spin = ang_vel_norm > self.cfg.crash_max_ang_vel_rad_s
-        died = died_z | died_tilt | died_spin
+        died = died_z 
         if self.eval and self.cfg.freeze_on_done_in_eval:
             will_end = died | time_out
             newly = will_end & ~self._eval_frozen
@@ -308,7 +308,8 @@ class QuadcopterTrajectoryEnv(DirectRLEnv):
 
         self._robot.reset(env_ids)
         super()._reset_idx(env_ids)
-        if len(env_ids) == self.num_envs and self.num_envs > 1 and not self.eval:
+        # Stagger episode lengths across parallel envs only when vectorized; num_envs==1 keeps full max_episode_length.
+        if len(env_ids) == self.num_envs and not self.eval and self.num_envs > 1:
             self.episode_length_buf = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
 
         self.episode_timesteps[env_ids] = 0

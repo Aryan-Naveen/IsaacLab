@@ -1,0 +1,12 @@
+{
+  "mode": "eval_one",
+  "agent_type": "CTRLSAC",
+  "checkpoint_dir": "/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/CTRL-SAC-False/26-03-22_21-06-29-199750_CTRLSACAgent/checkpoints",
+  "checkpoint_name": "agent_300000.pt",
+  "gym_task_id": "Isaac-Quadcopter-Refine-Trajectory-Direct-v0",
+  "coeff_json": "../coeffs/eval_one_default_coeff.json",
+  "spawn_xy_radius_max_m": 0.0,
+  "seed": 42,
+  "output_root": "/workspace/isaaclab/runs/eval",
+  "video": true
+}

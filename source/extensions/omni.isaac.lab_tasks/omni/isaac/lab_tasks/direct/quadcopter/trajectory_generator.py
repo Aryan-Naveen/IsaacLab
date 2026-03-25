@@ -12,6 +12,33 @@ import torch
 from numpy import polynomial as P
 from numpy.polynomial.legendre import Legendre
 
+# Max Legendre degree in the task basis (inclusive). JSON rows are padded/truncated to this width.
+TRAJ_LEGENDRE_MAX_DEGREE = 6
+TRAJ_POLY_NUM_COEFFS = TRAJ_LEGENDRE_MAX_DEGREE + 1
+
+
+def _pad_power_basis(poly_coef: np.ndarray, width: int) -> np.ndarray:
+    out = np.zeros(width, dtype=np.float64)
+    n = min(int(poly_coef.size), width)
+    if n:
+        out[:n] = np.asarray(poly_coef, dtype=np.float64).reshape(-1)[:n]
+    return out
+
+
+def _pad_legendre_basis(poly: Legendre, width: int) -> np.ndarray:
+    c = np.asarray(poly.coef, dtype=np.float64).reshape(-1)
+    out = np.zeros(width, dtype=np.float64)
+    n = min(c.size, width)
+    if n:
+        out[:n] = c[:n]
+    return out
+
+
+def _coeff_row_one_hot(index: int) -> list[int]:
+    r = [0] * TRAJ_POLY_NUM_COEFFS
+    r[index] = 1
+    return r
+
 
 class PolynomialTrajectoryGenerator:
     def __init__(
@@ -39,31 +66,33 @@ class PolynomialTrajectoryGenerator:
 
         self.eval = eval_mode
 
+        z = [0] * TRAJ_POLY_NUM_COEFFS
+
         if mode == 0:
-            self.coefficients = torch.tensor([[0, 0, 0, 0, 0, 0, 0]])
+            self.coefficients = torch.tensor([z])
             self.legendre = torch.zeros_like(self.coefficients)
 
         elif mode == 1:
-            self.coefficients = torch.tensor([[0, 1, 0, 0, 0, 0, 0]])
+            self.coefficients = torch.tensor([_coeff_row_one_hot(1)])
             self.legendre = torch.zeros_like(self.coefficients)
 
         elif mode == 2:
-            self.coefficients = torch.tensor([[0, 0, 1, 0, 0, 0, 0]])
+            self.coefficients = torch.tensor([_coeff_row_one_hot(2)])
             self.legendre = torch.zeros_like(self.coefficients)
 
         elif mode == 3:
             self.coefficients = torch.tensor(
                 [
-                    [0, 0, 0, 0, 0, 0, 0],
-                    [0, 1, 0, 0, 0, 0, 0],
-                    [0, 0, 1, 0, 0, 0, 0],
+                    z,
+                    _coeff_row_one_hot(1),
+                    _coeff_row_one_hot(2),
                 ]
             )
             self.legendre = torch.zeros_like(self.coefficients)
 
         elif mode == 4:
-            self.coefficients = torch.tensor([[0, 0, 0, 0, 0, 0, 0]])
-            self.legendre = torch.tensor([[0, 0, 0, 0, 0, 0, 0]])
+            self.coefficients = torch.tensor([z])
+            self.legendre = torch.tensor([z])
 
         elif mode == 5:
             self.coefficients = []
@@ -71,32 +100,36 @@ class PolynomialTrajectoryGenerator:
             for deg in range(6):
                 coeff, poly = self.generate_legendre_coeffecients(deg, returnpoly=True)
                 self.coefficients.append(coeff)
-                self.legendre.append(poly.coef)
+                self.legendre.append(_pad_legendre_basis(poly, TRAJ_POLY_NUM_COEFFS))
 
-            self.coefficients = torch.tensor(self.coefficients).float()
-            self.legendre = torch.tensor(self.legendre).float()
+            self.coefficients = torch.from_numpy(np.stack(self.coefficients, axis=0)).float()
+            self.legendre = torch.from_numpy(np.stack(self.legendre, axis=0)).float()
 
         elif mode == 6:
             coeff, poly = self.generate_legendre_coeffecients(6, returnpoly=True)
-            self.coefficients = torch.tensor([coeff]).float()
-            self.legendre = torch.tensor([poly.coef]).float()
+            leg = _pad_legendre_basis(poly, TRAJ_POLY_NUM_COEFFS)
+            self.coefficients = torch.from_numpy(np.asarray(coeff, dtype=np.float32).reshape(1, -1)).float()
+            self.legendre = torch.from_numpy(np.asarray(leg, dtype=np.float32).reshape(1, -1)).float()
 
         elif mode == 7:
-            self.coefficients = torch.tensor([])
-            self.legendre = torch.tensor([])
+            coeff_rows: list[torch.Tensor] = []
+            leg_rows: list[torch.Tensor] = []
             if predef_coeff is not None:
                 for coeff in predef_coeff:
                     coeffs, poly = self.convert_predefined_coeffecients(coeff, returnpoly=True)
-                    self.coefficients = torch.cat([self.coefficients, torch.tensor(coeffs).unsqueeze(0)], dim=0)
-                    self.legendre = torch.cat([self.legendre, torch.tensor(poly.coef).unsqueeze(0)], dim=0)
+                    leg = _pad_legendre_basis(poly, TRAJ_POLY_NUM_COEFFS)
+                    coeff_rows.append(torch.tensor(coeffs, dtype=torch.float32))
+                    leg_rows.append(torch.tensor(leg, dtype=torch.float32))
             else:
                 for _ in range(num_trials):
                     coeffs, poly = self.generate_legendre_coeffecients(5, eval=True, returnpoly=True)
-                    self.coefficients = torch.cat([self.coefficients, torch.tensor(coeffs).unsqueeze(0)], dim=0)
-                    self.legendre = torch.cat([self.legendre, torch.tensor(poly.coef).unsqueeze(0)], dim=0)
-
-            self.coefficients = self.coefficients.float()
-            self.legendre = self.legendre.float()
+                    leg = _pad_legendre_basis(poly, TRAJ_POLY_NUM_COEFFS)
+                    coeff_rows.append(torch.tensor(coeffs, dtype=torch.float32))
+                    leg_rows.append(torch.tensor(leg, dtype=torch.float32))
+            if not coeff_rows:
+                raise ValueError("mode 7 requires non-empty predef_coeff or num_trials > 0")
+            self.coefficients = torch.stack(coeff_rows, dim=0)
+            self.legendre = torch.stack(leg_rows, dim=0)
 
         self.coefficients = self.coefficients.to(self.device)
         self.legendre = self.legendre.to(self.device)
@@ -105,27 +138,34 @@ class PolynomialTrajectoryGenerator:
         self.eval = True
 
     def generate_legendre_coeffecients(self, deg, eval=False, returnpoly=False):
-        coeffs = np.zeros(7)
+        if deg < 0 or deg > TRAJ_LEGENDRE_MAX_DEGREE:
+            raise ValueError(f"deg must be in [0, {TRAJ_LEGENDRE_MAX_DEGREE}], got {deg}")
+        coeffs = np.zeros(TRAJ_POLY_NUM_COEFFS)
         coeffs[deg] = 1
 
         if eval:
             coeffs[: deg + 1] = np.random.randn(deg + 1)
 
         legendre_poly = Legendre(coeffs, domain=[0, self.B])
-        coeffs = np.pad(legendre_poly.convert(kind=P.Polynomial).coef, (0, 6 - deg))
-        coeffs[0] = 0
+        poly_coef = legendre_poly.convert(kind=P.Polynomial).coef
+        coefficients = _pad_power_basis(poly_coef, TRAJ_POLY_NUM_COEFFS)
+        coefficients[0] = 0
 
         if returnpoly:
-            return coeffs, legendre_poly
-        return coeffs
+            return coefficients, legendre_poly
+        return coefficients
 
     def convert_predefined_coeffecients(self, coeffs, returnpoly=False):
-        legendre_poly = Legendre(coeffs, domain=[0, self.B])
+        c = np.asarray(coeffs, dtype=np.float64).ravel()
+        if c.size > TRAJ_POLY_NUM_COEFFS:
+            raise ValueError(
+                f"Predefined Legendre row length {c.size} exceeds {TRAJ_POLY_NUM_COEFFS} "
+                f"(max degree {TRAJ_LEGENDRE_MAX_DEGREE})."
+            )
+        c = np.pad(c, (0, TRAJ_POLY_NUM_COEFFS - c.size))
+        legendre_poly = Legendre(c, domain=[0, self.B])
         poly_coef = legendre_poly.convert(kind=P.Polynomial).coef
-        # Match generate_legendre_coeffecients / naive_random_sample: 7 power-basis terms for traj.
-        coefficients = np.pad(poly_coef, (0, max(0, 7 - poly_coef.size)))
-        if coefficients.size > 7:
-            coefficients = coefficients[:7].copy()
+        coefficients = _pad_power_basis(poly_coef, TRAJ_POLY_NUM_COEFFS)
         coefficients[0] = 0
 
         if returnpoly:
@@ -163,14 +203,19 @@ class PolynomialTrajectoryGenerator:
         return selected_coeffs, selected_tasks
 
     def naive_random_sample_tasks(self, num_environments):
-        tasks = np.random.randn(num_environments, 7)
+        tasks = np.random.randn(num_environments, TRAJ_POLY_NUM_COEFFS)
         tasks[:, -1] = 0
         legendre_polys = [Legendre(task, domain=[0, self.B]) for task in tasks]
-        coeffs = [np.pad(poly.convert(kind=P.Polynomial).coef, (0, 7 - poly.convert(kind=P.Polynomial).coef.size)) for poly in legendre_polys]
+        coeffs = [
+            _pad_power_basis(poly.convert(kind=P.Polynomial).coef, TRAJ_POLY_NUM_COEFFS) for poly in legendre_polys
+        ]
 
         selected_coeffs = torch.tensor(coeffs, device=self.device).float()
         selected_coeffs[:, 0] = 0
-        selected_tasks = torch.tensor([poly.coef for poly in legendre_polys], device=self.device).float()
+        selected_tasks = torch.tensor(
+            [_pad_legendre_basis(poly, TRAJ_POLY_NUM_COEFFS) for poly in legendre_polys],
+            device=self.device,
+        ).float()
         selected_tasks[:, 0] = 0
         return selected_coeffs, selected_tasks
 

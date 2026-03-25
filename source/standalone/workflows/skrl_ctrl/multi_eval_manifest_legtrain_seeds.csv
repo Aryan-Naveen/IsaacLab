@@ -1,0 +1,18 @@
+# seed_* checkpoint dirs under legtrain runs that contain best_agent.pt and agent_250000.pt
+# Paths are for inside Docker (/workspace/isaaclab). On host, replace with your repo root.
+# Agent mapping: CTRL-SAC-True -> CTRLSAC-multi, CTRL-SAC-False -> CTRLSAC, SAC -> SAC
+CTRLSAC,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/CTRL-SAC-False/seed_42/26-03-23_20-06-01-914605_CTRLSACAgent/checkpoints
+CTRLSAC,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/CTRL-SAC-False/seed_43/26-03-23_22-58-05-584897_CTRLSACAgent/checkpoints
+CTRLSAC,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/CTRL-SAC-False/seed_44/26-03-24_01-52-29-684911_CTRLSACAgent/checkpoints
+CTRLSAC,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/CTRL-SAC-False/seed_45/26-03-24_04-47-40-399551_CTRLSACAgent/checkpoints
+CTRLSAC,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/CTRL-SAC-False/seed_46/26-03-24_07-43-05-094649_CTRLSACAgent/checkpoints
+CTRLSAC-multi,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/CTRL-SAC-True/seed_42/26-03-23_20-06-27-512180_CTRLSACAgent/checkpoints
+CTRLSAC-multi,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/CTRL-SAC-True/seed_43/26-03-23_23-01-27-389956_CTRLSACAgent/checkpoints
+CTRLSAC-multi,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/CTRL-SAC-True/seed_44/26-03-24_01-58-12-974512_CTRLSACAgent/checkpoints
+CTRLSAC-multi,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/CTRL-SAC-True/seed_45/26-03-24_04-55-34-480765_CTRLSACAgent/checkpoints
+CTRLSAC-multi,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/CTRL-SAC-True/seed_46/26-03-24_07-53-24-831917_CTRLSACAgent/checkpoints
+SAC,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/SAC/seed_42/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0-SAC/checkpoints
+SAC,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/SAC/seed_43/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0-SAC/checkpoints
+SAC,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/SAC/seed_44/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0-SAC/checkpoints
+SAC,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/SAC/seed_45/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0-SAC/checkpoints
+SAC,/workspace/isaaclab/runs/torch/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0/SAC/seed_46/Isaac-Quadcopter-legtrain-Trajectory-Direct-v0-SAC/checkpoints

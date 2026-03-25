@@ -29,6 +29,7 @@ def load_preset_file(path: str | Path) -> dict[str, Any]:
 
 
 def load_coeff_json(path: str | Path) -> list[list[float]]:
+    """Load coefficient rows for ``predefined_task_coeff`` (shorter rows are zero-padded to degree 10)."""
     with open(Path(path), encoding="utf-8") as f:
         data = json.load(f)
     if not data:

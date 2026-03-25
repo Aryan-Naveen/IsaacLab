@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import copy
 import json
+import os
+import tempfile
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +22,55 @@ from networks.actor import StochasticActor
 from networks.critic import Critic, SACCritic
 from networks.feature import Mu, Phi, Theta
 from utils.utils import load_isaaclab_env
+
+
+def isaaclab_repo_root() -> Path:
+    """Ascend from ``factory.py`` until a directory contains ``source/standalone`` (Isaac Lab repo root)."""
+    p = Path(__file__).resolve()
+    for d in p.parents:
+        if (d / "source" / "standalone").is_dir():
+            return d
+    return p.parents[4]
+
+
+def ensure_record_video_dir(video_folder: str | Path) -> str:
+    """Create a folder for :class:`gymnasium.wrappers.RecordVideo`, with a temp-dir fallback.
+
+    ``runs/torch/...`` under the repo can raise ``FileNotFoundError`` when ``runs`` is a broken
+    symlink or the bind mount omits that path.
+
+    Set env ``ISAACLAB_SKRL_VIDEO_ROOT`` to a writable directory to mirror paths under the repo
+    root (same relative path as under ``isaaclab_repo_root()``).
+    """
+    raw = Path(video_folder).expanduser()
+    override = os.environ.get("ISAACLAB_SKRL_VIDEO_ROOT", "").strip()
+    if override:
+        root = isaaclab_repo_root()
+        try:
+            primary = Path(override) / raw.resolve().relative_to(root.resolve())
+        except ValueError:
+            primary = Path(override) / raw.name
+    else:
+        primary = raw
+
+    try:
+        os.makedirs(primary, mode=0o755, exist_ok=True)
+        return str(primary.resolve())
+    except OSError as exc:
+        tail_parts = raw.parts[-6:] if len(raw.parts) >= 6 else raw.parts
+        alt = Path(tempfile.gettempdir()) / "isaaclab_skrl_recordings" / Path(*tail_parts)
+        try:
+            os.makedirs(alt, mode=0o755, exist_ok=True)
+        except OSError as exc2:
+            raise RuntimeError(
+                f"Could not create RecordVideo folder {primary} ({exc!s}) nor fallback {alt} ({exc2!s})"
+            ) from exc2
+        warnings.warn(
+            f"Could not mkdir RecordVideo path {primary} ({exc!s}); using {alt}",
+            UserWarning,
+            stacklevel=2,
+        )
+        return str(alt.resolve())
 
 
 def observation_vector_dim(observation_space: gym.Space) -> int:
@@ -236,8 +288,9 @@ def build_env(
     cli_args = list(cli_args or [])
     env = load_isaaclab_env(task_name=task_name, num_envs=num_envs, cli_args=cli_args)
     if record_video and video_folder:
+        vpath_str = ensure_record_video_dir(video_folder)
         vk = {
-            "video_folder": video_folder,
+            "video_folder": vpath_str,
             "step_trigger": lambda step, _s=video_step_trigger: step % _s == 0,
             "video_length": video_length,
             "disable_logger": True,
@@ -326,6 +379,7 @@ def build_ctrlsac_agent(
     finetune: bool = False,
     task_name: str = "",
     ckpt_path: str | None = None,
+    memory_path: str | None = None,
     exp: dict[str, Any] | None = None,
 ) -> CTRLSACAgent:
     exp = exp or {}
@@ -363,22 +417,41 @@ def build_ctrlsac_agent(
     cfg["experiment"]["checkpoint_interval"] = int(exp.get("checkpoint_interval", 1000 if finetune else 10000))
     cfg["use_feature_target"] = bool(exp.get("use_feature_target", True))
     cfg["extra_feature_steps"] = int(exp.get("extra_feature_steps", 0))
-    cfg["extra_critic_steps"] = int(exp.get("extra_critic_steps", 2))
+    # Critic optimizer steps per policy step: ``extra_critic_steps + 1`` (see CTRLSACAgent._update).
+    cfg["extra_critic_steps"] = int(exp.get("extra_critic_steps", 5))
     cfg["target_update_period"] = int(exp.get("target_update_period", 1))
     cfg["eval"] = bool(exp.get("eval", False))
     cfg["experiment"]["wandb"] = bool(exp.get("wandb", True))
-    cfg["experiment"]["wandb_kwargs"] = exp.get(
-        "wandb_kwargs",
-        {
-            "project": exp.get("wandb_project", "CDC"),
-            "name": f"CTRL-SAC-multitask-{multitask}",
-            "config": {"task": task_name, "num_envs": getattr(env, "num_envs", None), "multitask": multitask},
+    _seed = int(exp.get("seed", 42))
+    _default_wk: dict[str, Any] = {
+        "project": exp.get("wandb_project", "CDC"),
+        "name": (exp.get("wandb_name") or f"CTRL-SAC-multitask-{multitask}"),
+        "config": {
+            "task": task_name,
+            "num_envs": getattr(env, "num_envs", None),
+            "multitask": multitask,
+            "seed": _seed,
         },
-    )
+    }
+    _user_wk = exp.get("wandb_kwargs")
+    if _user_wk:
+        _merged = {**_default_wk, **_user_wk}
+        if isinstance(_user_wk.get("config"), dict):
+            _merged["config"] = {**_default_wk["config"], **_user_wk["config"]}
+        cfg["experiment"]["wandb_kwargs"] = _merged
+    else:
+        cfg["experiment"]["wandb_kwargs"] = _default_wk
     cfg["experiment"]["directory"] = exp.get("experiment_directory", f"runs/torch/{task_name}/CTRL-SAC-{multitask}/")
     cfg["alpha"] = float(exp.get("alpha", 1e-3))
     cfg["memory"] = None
     cfg["drone_state_dim"] = drone_sd
+    cfg["multitask"] = bool(multitask)
+    cfg["policy_phased_learning_rate"] = bool(exp.get("policy_phased_learning_rate", False))
+    cfg["policy_phased_lr_phase1"] = float(exp.get("policy_phased_lr_phase1", 1e-6))
+    cfg["policy_phased_lr_phase2"] = float(exp.get("policy_phased_lr_phase2", 1e-6))
+
+    if memory_path:
+        memory.load(memory_path, format="pt")
 
     agent = CTRLSACAgent(
         models=models,
@@ -390,6 +463,13 @@ def build_ctrlsac_agent(
     )
     if ckpt_path:
         agent.load(ckpt_path)
+    _phased = cfg["policy_phased_learning_rate"] and multitask
+    agent.policy_optimizer.param_groups[0]["lr"] = (
+        cfg["policy_phased_lr_phase1"] if _phased else cfg["actor_learning_rate"]
+    )
+    agent.critic_optimizer.param_groups[0]['lr'] = cfg['critic_learning_rate']
+    agent.feature_optimizer.param_groups[0]['lr'] = cfg['feature_learning_rate']
+    
     return agent
 
 
@@ -450,14 +530,20 @@ def build_sac_agent(
     cfg["experiment"]["directory"] = exp.get("experiment_directory", f"runs/torch/{task_name}/SAC")
     cfg["experiment"]["experiment_name"] = exp.get("experiment_name", f"{task_name}-SAC")
     cfg["experiment"]["wandb"] = bool(exp.get("wandb", True))
-    cfg["experiment"]["wandb_kwargs"] = exp.get(
-        "wandb_kwargs",
-        {
-            "project": exp.get("wandb_project", "CDC"),
-            "name": "SAC-baseline",
-            "config": {"task": task_name, "num_envs": getattr(env, "num_envs", None)},
-        },
-    )
+    _seed = int(exp.get("seed", 42))
+    _default_wk = {
+        "project": exp.get("wandb_project", "CDC"),
+        "name": (exp.get("wandb_name") or "SAC-baseline"),
+        "config": {"task": task_name, "num_envs": getattr(env, "num_envs", None), "seed": _seed},
+    }
+    _user_wk = exp.get("wandb_kwargs")
+    if _user_wk:
+        _merged = {**_default_wk, **_user_wk}
+        if isinstance(_user_wk.get("config"), dict):
+            _merged["config"] = {**_default_wk["config"], **_user_wk["config"]}
+        cfg["experiment"]["wandb_kwargs"] = _merged
+    else:
+        cfg["experiment"]["wandb_kwargs"] = _default_wk
     return OfflineAWRSAC(
         models=models,
         memory=memory,

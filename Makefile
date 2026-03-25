@@ -1,4 +1,4 @@
-.PHONY: build up start start_sac start_ctrlsac start_eval start_eval_one start_eval_batch start_finetune debug-run debug-run-ctrlsac debug-kill stop rebuild logs shell restart help
+.PHONY: build up start start_sac start_ctrlsac start_eval start_eval_one start_eval_one_coeff_sweep start_eval_batch start_finetune start_finetune_online debug-run debug-run-ctrlsac debug-kill stop rebuild logs shell restart help
 
 # Docker Compose (Isaac Lab base image — needs profile "base" because the service is profile-gated)
 COMPOSE_FILE := docker/docker-compose.yaml
@@ -13,7 +13,9 @@ CTRLSAC_TRAIN_SCRIPT := $(SKRL_DIR)/train.py
 EVAL_SCRIPT := $(SKRL_DIR)/eval.py
 EVAL_BATCH_SCRIPT := $(SKRL_DIR)/eval_batch.py
 EVAL_ONE_SCRIPT := $(SKRL_DIR)/eval_one.py
+EVAL_ONE_COEFF_SWEEP_SH := $(SKRL_DIR)/eval_one_coeff_sweep.sh
 FINETUNE_SCRIPT := $(SKRL_DIR)/finetune.py
+FINETUNE_ONLINE_SCRIPT := $(SKRL_DIR)/finetune_online.py
 
 DEBUG_PORT ?= 5678
 
@@ -32,8 +34,11 @@ EVAL_ARGS ?=
 #   Absolute path -> unchanged
 # Examples:
 #   make start_eval_one EVAL_PRESET=eval_one_example.json
+#   make start_eval_one_coeff_sweep EVAL_COEFF_DIR=configs/coeffs
+#   (bare dirname → skrl_ctrl/configs/coeffs; EACH_ROW=1 default for multi-row JSON; disable: EVAL_COEFF_SWEEP_EACH_ROW=0)
 #   make start_eval_batch EVAL_PRESET=batch_basis3_B128.json
 #   make start_finetune EVAL_PRESET=finetune_ctrlsac_multi_deg3.json
+#   make start_finetune_online EVAL_PRESET=finetune_online_ctrlsac_multi_deg3.json
 # Optional overrides: ARGS='--seed 1 --folder /path --ckpt agent.pt'
 EVAL_PRESET ?=
 
@@ -41,6 +46,13 @@ EVAL_PRESET ?=
 SKRL_PRESET_DIR := /workspace/isaaclab/$(SKRL_DIR)/configs/presets
 # Pure Make (no $(shell case … esac)): Make treats ")" in shell "*)" as end of $(shell …).
 EVAL_PRESET_RESOLVED = $(if $(strip $(EVAL_PRESET)),$(if $(filter /%,$(EVAL_PRESET)),$(EVAL_PRESET),$(if $(findstring /,$(EVAL_PRESET)),/workspace/isaaclab/$(EVAL_PRESET),$(SKRL_PRESET_DIR)/$(EVAL_PRESET))),)
+
+SKRL_COEFF_DIR := /workspace/isaaclab/$(SKRL_DIR)/configs/coeffs
+# Directory of coefficient *.json files for eval_one_coeff_sweep.sh (skips *manifest*.json). Same path rules as EVAL_PRESET.
+EVAL_COEFF_DIR ?=
+EVAL_COEFF_DIR_RESOLVED = $(if $(strip $(EVAL_COEFF_DIR)),$(if $(filter /%,$(EVAL_COEFF_DIR)),$(EVAL_COEFF_DIR),$(if $(findstring /,$(EVAL_COEFF_DIR)),/workspace/isaaclab/$(EVAL_COEFF_DIR),$(SKRL_COEFF_DIR)/$(EVAL_COEFF_DIR))),)
+# 1 = split multi-row coeff JSONs with jq (one eval per row). 0 = one eval per file (each file must be single-row for eval-one).
+EVAL_COEFF_SWEEP_EACH_ROW ?= 1
 
 # --- eval-batch quick mode (used when EVAL_BATCH_ARGS and EVAL_PRESET are empty) ---
 #   make start_eval_batch EVAL_BATCH_AGENT=sac EVAL_BATCH_VIDEO=1
@@ -106,11 +118,23 @@ start_eval_one: _check_container
 	@test -n "$(strip $(EVAL_PRESET))" || (echo "Set EVAL_PRESET, e.g. EVAL_PRESET=eval_one_example.json" >&2; exit 1)
 	docker compose -f ${COMPOSE_FILE} exec ${SERVICE} bash -lc 'cd /workspace/isaaclab && $(ISAACLAB_SH) -p $(EVAL_ONE_SCRIPT) --headless --enable_cameras --preset "$(EVAL_PRESET_RESOLVED)" $(ARGS)'
 
+## start_eval_one_coeff_sweep: bash loop — every *.json in EVAL_COEFF_DIR × CTRLSAC-multi, CTRLSAC, SAC (agent-first; jq if EACH_ROW=1)
+start_eval_one_coeff_sweep: _check_container
+	@echo "Starting eval-one coeff sweep in '${SERVICE}'..."
+	@test -n "$(strip $(EVAL_COEFF_DIR))" || (echo "Set EVAL_COEFF_DIR, e.g. EVAL_COEFF_DIR=configs/coeffs" >&2; exit 1)
+	docker compose -f ${COMPOSE_FILE} exec ${SERVICE} bash -lc 'cd /workspace/isaaclab && export EACH_ROW=$(EVAL_COEFF_SWEEP_EACH_ROW) PYTHONUNBUFFERED=1 && bash $(EVAL_ONE_COEFF_SWEEP_SH) "$(EVAL_COEFF_DIR_RESOLVED)" --headless --enable_cameras $(ARGS)'
+
 ## start_finetune: Few-shot offline rounds (preset JSON; see configs/presets/finetune_ctrlsac_multi_deg3.json)
 start_finetune: _check_container
 	@echo "Starting finetune in '${SERVICE}'..."
 	@test -n "$(strip $(EVAL_PRESET))" || (echo "Set EVAL_PRESET, e.g. EVAL_PRESET=finetune_ctrlsac_multi_deg3.json" >&2; exit 1)
 	docker compose -f ${COMPOSE_FILE} exec ${SERVICE} bash -lc 'cd /workspace/isaaclab && $(ISAACLAB_SH) -p $(FINETUNE_SCRIPT) --headless --enable_cameras --preset "$(EVAL_PRESET_RESOLVED)" $(ARGS)'
+
+## start_finetune_online: Online fine-tune from checkpoint (preset with mode finetune-online; see finetune_online_ctrlsac_multi_deg3.json)
+start_finetune_online: _check_container
+	@echo "Starting online finetune in '${SERVICE}'..."
+	@test -n "$(strip $(EVAL_PRESET))" || (echo "Set EVAL_PRESET, e.g. EVAL_PRESET=finetune_online_ctrlsac_multi_deg3.json" >&2; exit 1)
+	docker compose -f ${COMPOSE_FILE} exec ${SERVICE} bash -lc 'cd /workspace/isaaclab && $(ISAACLAB_SH) -p $(FINETUNE_ONLINE_SCRIPT) --headless --enable_cameras --preset "$(EVAL_PRESET_RESOLVED)" $(ARGS)'
 
 ## start_eval_batch: eval_batch.py — preset (EVAL_PRESET), raw args (EVAL_BATCH_ARGS), or legacy quick mode
 start_eval_batch: _check_container

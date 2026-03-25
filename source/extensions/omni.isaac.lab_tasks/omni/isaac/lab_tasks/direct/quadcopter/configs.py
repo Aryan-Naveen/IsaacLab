@@ -19,6 +19,7 @@ from omni.isaac.lab.utils import configclass
 
 from omni.isaac.lab_assets import CRAZYFLIE_CFG  # isort: skip
 
+from .trajectory_generator import TRAJ_POLY_NUM_COEFFS
 from .ui_window import QuadcopterEnvWindow
 
 
@@ -146,7 +147,7 @@ class QuadcopterTrajectoryLinearEnvCfg(DirectRLEnvCfg):
     predefined_task_coeff = None
 
     if include_coeffecients:
-        num_observations += 7
+        num_observations += TRAJ_POLY_NUM_COEFFS
 
     def __post_init__(self):
         self.viewer.eye = [0.0, 4.0, 7.5]
@@ -161,7 +162,14 @@ class QuadcopterTrajectoryLegendreTrainingEnvCfg(QuadcopterTrajectoryLinearEnvCf
     mode = 5
     curriculum = True
     profile = [3]
+    total_iterations = int(3e5)
 
+
+@configclass
+class QuadcopterTrajectoryLegendreTrainingSingleTaskEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
+    mode = 5
+    curriculum = True
+    profile = [1]
 
 @configclass
 class QuadcopterTrajectoryTrainingRandomTaskEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
@@ -199,8 +207,8 @@ class QuadcopterTrajectoryRefineEnvCfg(QuadcopterTrajectoryLinearEnvCfg):
 
     mode = 7
     curriculum = False
-    profile = [10]
     predefined_task_coeff = [[0, 0, 0, 0, 0, 1, 0]]
+    total_iterations = int(5e4)
 
 
 @configclass

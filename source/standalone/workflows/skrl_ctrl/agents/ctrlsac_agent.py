@@ -45,7 +45,12 @@ class CTRLSACAgent(SAC):
         self.theta = self.models.get("theta", None)
         self.use_feature_target = cfg['use_feature_target']
         self.extra_feature_steps = cfg['extra_feature_steps']
-        
+        self.extra_critic_steps = int(cfg.get("extra_critic_steps", 5))
+        self._multitask = bool(cfg.get("multitask", False))
+        self._policy_phased_lr = bool(cfg.get("policy_phased_learning_rate", False)) and self._multitask
+        self._policy_phased_lr_phase1 = float(cfg.get("policy_phased_lr_phase1", 1e-6))
+        self._policy_phased_lr_phase2 = float(cfg.get("policy_phased_lr_phase2", 1e-6))
+
         self.alpha = cfg['alpha']
         self.eval = cfg['eval']
         self._drone_state_dim = int(cfg.get("drone_state_dim", 13))
@@ -131,8 +136,28 @@ class CTRLSACAgent(SAC):
         exp = self.cfg.get("experiment", {}) if isinstance(self.cfg, dict) else {}
         return int(exp.get("write_interval", 0) or 0) > 0
 
+    def _sync_phased_policy_lr(self, timestep: int, timesteps: int) -> None:
+        """Multitask only: policy LR = phase1 for first half of [learning_starts, timesteps), else phase2."""
+        if not self._policy_phased_lr:
+            return
+        ls = int(getattr(self, "_learning_starts", self.cfg.get("learning_starts", 0)) or 0)
+        t = int(timestep)
+        T = int(timesteps)
+        span = max(0, T - ls)
+        if span == 0:
+            lr = self._policy_phased_lr_phase2
+        elif t < ls:
+            lr = self._policy_phased_lr_phase1
+        else:
+            half = max(1, span // 2)
+            rel = t - ls
+            lr = self._policy_phased_lr_phase1 if rel < half else self._policy_phased_lr_phase2
+        for g in self.policy_optimizer.param_groups:
+            g["lr"] = lr
+
     def _offline_awr_update(self, timestep: int, timesteps: int) -> None:
         """Offline few-shot step: frozen φ, Bellman Q, advantage-weighted BC (no entropy in target)."""
+        self._sync_phased_policy_lr(timestep, timesteps)
         sampled_states, sampled_actions, sampled_rewards, sampled_next_states, sampled_dones = (
             self.memory.sample(names=self._tensors_names, batch_size=self._batch_size)[0]
         )
@@ -296,7 +321,8 @@ class CTRLSACAgent(SAC):
         self.target_critic_2.update_parameters(self.critic_2, polyak=self._polyak)
 
         if self._learning_rate_scheduler:
-            self.policy_scheduler.step()
+            if not self._policy_phased_lr:
+                self.policy_scheduler.step()
             self.critic_scheduler.step()
 
         if self._metrics_logging_enabled():
@@ -317,6 +343,8 @@ class CTRLSACAgent(SAC):
             for sub in range(self._gradient_steps):
                 self._offline_awr_update(timestep + sub, timesteps)
             return
+
+        self._sync_phased_policy_lr(timestep, timesteps)
 
         # sample a batch from memory
         sampled_states, sampled_actions, sampled_rewards, sampled_next_states, sampled_dones = \
@@ -361,7 +389,7 @@ class CTRLSACAgent(SAC):
             if self.use_feature_target:
                 self.frozen_phi_target.load_state_dict(self.phi_target.state_dict().copy())
 
-            for _ in range(self.extra_feature_steps+1):
+            for _ in range(self.extra_critic_steps + 1):
                 sampled_states = self._state_preprocessor(sampled_states, train=True)
                 sampled_next_states = self._state_preprocessor(sampled_next_states, train=True)
 
@@ -444,7 +472,8 @@ class CTRLSACAgent(SAC):
 
             # update learning rate
             if self._learning_rate_scheduler:
-                self.policy_scheduler.step()
+                if not self._policy_phased_lr:
+                    self.policy_scheduler.step()
                 self.critic_scheduler.step()
 
             # record data
@@ -470,6 +499,20 @@ class CTRLSACAgent(SAC):
                     self.track_data("Loss / Entropy loss", entropy_loss.item())
                     self.track_data("Coefficient / Entropy coefficient", self._entropy_coefficient.item())
 
-                if self._learning_rate_scheduler:
-                    self.track_data("Learning / Policy learning rate", self.policy_scheduler.get_last_lr()[0])
-                    self.track_data("Learning / Critic learning rate", self.critic_scheduler.get_last_lr()[0])
+                for label, opt in (
+                    ("Policy", self.policy_optimizer),
+                    ("Critic", self.critic_optimizer),
+                    ("Feature", self.feature_optimizer),
+                ):
+                    if opt is not None and opt.param_groups:
+                        self.track_data(
+                            f"Learning / {label} learning rate",
+                            float(opt.param_groups[0]["lr"]),
+                        )
+                if self._learn_entropy and getattr(self, "entropy_optimizer", None) is not None:
+                    eo = self.entropy_optimizer
+                    if eo.param_groups:
+                        self.track_data(
+                            "Learning / Entropy learning rate",
+                            float(eo.param_groups[0]["lr"]),
+                        )

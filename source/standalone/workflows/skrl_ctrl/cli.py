@@ -1,4 +1,4 @@
-"""CLI entry: train / eval / eval-one / eval-batch / finetune (prepend subcommand or default ``train-ctrlsac``)."""
+"""CLI entry: train / eval / eval-one / eval-batch / finetune / finetune-online (prepend subcommand or default ``train-ctrlsac``)."""
 
 from __future__ import annotations
 
@@ -24,13 +24,17 @@ from factory import (
     build_env,
     build_loaded_eval_agent,
     build_sac_agent,
+    ensure_record_video_dir,
+    isaaclab_repo_root,
     load_experiment_json,
     make_refine_env_cfg,
 )
 from presets import load_coeff_json
 from utils.utils import load_isaaclab_env
 
-_SUB = frozenset({"train-ctrlsac", "train-sac", "eval", "eval-batch", "eval-one", "finetune"})
+_SUB = frozenset(
+    {"train-ctrlsac", "train-sac", "eval", "eval-batch", "eval-one", "finetune", "finetune-online"}
+)
 
 
 def _checkpoint_path_or_raise(folder: str, ckpt: str) -> Path:
@@ -66,18 +70,33 @@ def run_train_ctrlsac(argv: list[str] | None = None) -> None:
         default="",
         help="Optional JSON file merged into agent hyperparameters.",
     )
+    parser.add_argument("--seed", type=int, default=42, help="RNG seed (env, agent, W&B config).")
+    parser.add_argument("--wandb_name", type=str, default="", help="Override Weights & Biases run name.")
+    parser.add_argument(
+        "--experiment_directory",
+        type=str,
+        default="",
+        help="Override checkpoint/log directory (default under runs/torch/<task>/CTRL-SAC-<multitask>/).",
+    )
     AppLauncher.add_app_launcher_args(parser)
     args, _ = parser.parse_known_args(argv[1:])
 
     finetune = args.env_version == "legtrain-finetune"
     task_name = f"Isaac-Quadcopter-{args.env_version}-Trajectory-Direct-v0"
     num_envs = 1 if finetune else 32
-    set_seed(42)
+    set_seed(args.seed)
 
     exp = load_experiment_json(Path(__file__).resolve().parent / "configs" / "default_experiment.json")
     exp.update(load_experiment_json(args.experiment_json or None))
+    exp["seed"] = args.seed
+    if args.wandb_name:
+        exp["wandb_name"] = args.wandb_name
+    if args.experiment_directory:
+        exp["experiment_directory"] = args.experiment_directory
 
-    video_folder = os.path.join(f"runs/torch/{args.env_version}/", "videos", "train", "CTRLSAC")
+    video_folder = str(
+        isaaclab_repo_root() / "runs" / "torch" / args.env_version / "videos" / "train" / "CTRLSAC"
+    )
     env = build_env(
         task_name,
         num_envs=num_envs,
@@ -99,7 +118,7 @@ def run_train_ctrlsac(argv: list[str] | None = None) -> None:
         exp=exp,
     )
 
-    timesteps = int(3e5) if not finetune else int(5e4)
+    timesteps = int(2.5e5) if not finetune else int(5e4)
     cfg_trainer = {"timesteps": timesteps, "headless": True, "environment_info": "log"}
     trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
     exp_dir = agent.cfg["experiment"]["directory"]
@@ -112,17 +131,32 @@ def run_train_sac(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Train SAC baseline on quadcopter trajectory task.")
     parser.add_argument("--env_version", type=str, default="legtrain")
     parser.add_argument("--experiment_json", type=str, default="")
+    parser.add_argument("--seed", type=int, default=42, help="RNG seed (env, agent, W&B config).")
+    parser.add_argument("--wandb_name", type=str, default="", help="Override Weights & Biases run name.")
+    parser.add_argument(
+        "--experiment_directory",
+        type=str,
+        default="",
+        help="Override checkpoint/log directory (default runs/torch/<task>/SAC).",
+    )
     AppLauncher.add_app_launcher_args(parser)
     args, _ = parser.parse_known_args(argv[1:])
 
     finetune = args.env_version == "legtrain-finetune"
     task_name = f"Isaac-Quadcopter-{args.env_version}-Trajectory-Direct-v0"
     num_envs = 1 if finetune else 32
-    set_seed(42)
+    set_seed(args.seed)
 
     exp = load_experiment_json(Path(__file__).resolve().parent / "configs" / "default_experiment.json")
     exp.update(load_experiment_json(args.experiment_json or None))
-    video_folder = os.path.join(f"runs/torch/{args.env_version}/", "videos", "train", "SAC")
+    exp["seed"] = args.seed
+    if args.wandb_name:
+        exp["wandb_name"] = args.wandb_name
+    if args.experiment_directory:
+        exp["experiment_directory"] = args.experiment_directory
+    video_folder = ensure_record_video_dir(
+        str(isaaclab_repo_root() / "runs" / "torch" / args.env_version / "videos" / "train" / "SAC")
+    )
     vk = {
         "video_folder": video_folder,
         "step_trigger": lambda step: step % 10000 == 0,
@@ -139,7 +173,7 @@ def run_train_sac(argv: list[str] | None = None) -> None:
     device = env.device
     memory = RandomMemory(memory_size=int(1e5), num_envs=env.num_envs, device=device)
     agent = build_sac_agent(env, memory, device, finetune=finetune, task_name=task_name, exp=exp)
-    timesteps = int(5e5) if not finetune else int(25e4)
+    timesteps = int(2.5e5) if not finetune else int(25e4)
     cfg_trainer = {"timesteps": timesteps, "headless": True, "environment_info": "log"}
     trainer = SequentialTrainer(cfg=cfg_trainer, env=env, agents=agent)
     exp_dir = agent.cfg["experiment"]["directory"]
@@ -235,6 +269,12 @@ def run_eval_one(argv: list[str] | None = None) -> None:
     parser.add_argument("--preset", type=str, required=True, help="Path to preset file.")
     parser.add_argument("--folder", type=str, default="", help="Override checkpoint_dir.")
     parser.add_argument("--ckpt", type=str, default="", help="Override checkpoint_name.")
+    parser.add_argument(
+        "--coeff_json",
+        type=str,
+        default="",
+        help="Override coeff_json (must contain exactly one coefficient row for eval_one).",
+    )
     parser.add_argument("--seed", type=int, default=None, help="Override seed.")
     parser.add_argument("--output_root", type=str, default="", help="Override output_root.")
     AppLauncher.add_app_launcher_args(parser)
@@ -249,6 +289,8 @@ def run_eval_one(argv: list[str] | None = None) -> None:
         ov["checkpoint_dir"] = args.folder
     if args.ckpt.strip():
         ov["checkpoint_name"] = args.ckpt
+    if args.coeff_json.strip():
+        ov["coeff_json"] = args.coeff_json
     if args.seed is not None:
         ov["seed"] = args.seed
     if args.output_root.strip():
@@ -287,6 +329,39 @@ def run_finetune(argv: list[str] | None = None) -> None:
     if args.num_rounds is not None:
         ov["num_rounds"] = args.num_rounds
     run_finetune_from_preset(merge_preset(p, ov), preset_file=Path(args.preset).resolve())
+
+
+def run_finetune_online(argv: list[str] | None = None) -> None:
+    argv = argv if argv is not None else sys.argv
+    parser = argparse.ArgumentParser(description="Online fine-tune from checkpoint (preset JSON/YAML).")
+    parser.add_argument("--preset", type=str, required=True)
+    parser.add_argument("--folder", type=str, default="")
+    parser.add_argument("--ckpt", type=str, default="")
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--output_root", type=str, default="")
+    parser.add_argument("--B", type=int, default=None)
+    parser.add_argument("--timesteps", type=int, default=None)
+    AppLauncher.add_app_launcher_args(parser)
+    args, _unknown = parser.parse_known_args(argv[1:])
+
+    from eval_driver import run_finetune_online_from_preset
+    from presets import load_preset_file, merge_preset
+
+    p = load_preset_file(args.preset)
+    ov: dict = {}
+    if args.folder.strip():
+        ov["checkpoint_dir"] = args.folder
+    if args.ckpt.strip():
+        ov["checkpoint_name"] = args.ckpt
+    if args.seed is not None:
+        ov["seed"] = args.seed
+    if args.output_root.strip():
+        ov["output_root"] = args.output_root
+    if args.B is not None:
+        ov["B"] = args.B
+    if args.timesteps is not None:
+        ov["timesteps"] = args.timesteps
+    run_finetune_online_from_preset(merge_preset(p, ov), preset_file=Path(args.preset).resolve())
 
 
 def run_eval_batch(argv: list[str] | None = None) -> None:
@@ -333,7 +408,7 @@ def run_eval_batch(argv: list[str] | None = None) -> None:
         "--coeff_json",
         type=str,
         default="",
-        help='JSON path for predefined_task_coeff (e.g. [[0,0,0,0,0,1,0]]). Default: Refine cfg row.',
+        help="JSON path for predefined_task_coeff: Legendre basis coeffs (1–11 values, degree ≤ 10; e.g. [[0,0,0,0,0,0,0,1]] for P_7). Shorter rows are zero-padded.",
     )
     parser.add_argument("--out", type=str, default="", help="Output path for EvalRolloutBundle (.pt).")
     parser.add_argument(
@@ -386,6 +461,10 @@ def run_eval_batch(argv: list[str] | None = None) -> None:
             ov["B"] = args.B
         if "--spawn_xy_radius_max_m" in joined:
             ov["spawn_xy_radius_max_m"] = args.spawn_xy_radius_max_m
+        if args.coeff_json.strip():
+            ov["coeff_json"] = args.coeff_json
+        if "--agent_type" in joined:
+            ov["agent_type"] = args.agent_type
         run_eval_batch_from_preset(merge_preset(p, ov), preset_file=Path(args.preset).resolve())
         return
 
@@ -528,5 +607,7 @@ def main() -> None:
         run_eval_batch()
     elif cmd == "finetune":
         run_finetune()
+    elif cmd == "finetune-online":
+        run_finetune_online()
     else:
         raise RuntimeError(f"Unknown command {cmd}")

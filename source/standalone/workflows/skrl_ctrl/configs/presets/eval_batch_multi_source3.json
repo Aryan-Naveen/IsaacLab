@@ -1,0 +1,14 @@
+{
+  "mode": "eval_batch",
+  "agent_type": "CTRLSAC",
+  "checkpoint_dir": "/workspace/isaaclab/runs/torch/YOUR_RUN/checkpoints",
+  "checkpoint_name": "best_agent.pt",
+  "gym_task_id": "Isaac-Quadcopter-Refine-Trajectory-Direct-v0",
+  "coeff_pool_json": "../coeffs/multi_eval/source_tasks.json",
+  "B": 3,
+  "seed": 42,
+  "sequential_pool_indices": true,
+  "spawn_xy_radius_max_m": 0.0,
+  "video": false,
+  "output_bundle": "/workspace/isaaclab/runs/eval/multi_eval_source.pt"
+}

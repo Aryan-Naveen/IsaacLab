@@ -146,6 +146,7 @@ class QuadcopterEnv(DirectRLEnv):
 
         self._robot.reset(env_ids)
         super()._reset_idx(env_ids)
+        # Stagger episode lengths across parallel envs only when vectorized; num_envs==1 keeps full max_episode_length.
         if len(env_ids) == self.num_envs and self.num_envs > 1:
             self.episode_length_buf = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
 
